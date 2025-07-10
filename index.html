@@ -149,28 +149,43 @@
             scene.add(arrow);
         }
         
-        function startAR() {
-            updateStatus("Démarrage de l'AR...");
-            
-            document.getElementById('start-button').style.display = 'none';
-            document.getElementById('ar-container').style.display = 'block';
-            
-            // Créer le bouton AR
-            const arButton = ARButton.createButton(renderer, { 
-                requiredFeatures: ['hit-test'],
-                optionalFeatures: ['dom-overlay'],
-                domOverlay: { root: document.body }
-            });
-            
-            document.body.appendChild(arButton);
-            
-            // Gestion de la session AR
-            renderer.xr.addEventListener('sessionstart', onSessionStart);
-            renderer.xr.addEventListener('sessionend', onSessionEnd);
-            
-            // Démarrer la boucle de rendu
-            renderer.setAnimationLoop(render);
+        async function startAR() {
+    updateStatus("Vérification de la compatibilité AR...");
+    
+    try {
+        // Vérification plus complète de la compatibilité
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        if (!supported) {
+            updateStatus("AR non supporté sur cet appareil");
+            return;
         }
+
+        updateStatus("Démarrage de l'AR...");
+        
+        document.getElementById('start-button').style.display = 'none';
+        document.getElementById('ar-container').style.display = 'block';
+        
+        // Créer le bouton AR
+        const arButton = ARButton.createButton(renderer, { 
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body }
+        });
+        
+        document.body.appendChild(arButton);
+        
+        // Gestion de la session AR
+        renderer.xr.addEventListener('sessionstart', onSessionStart);
+        renderer.xr.addEventListener('sessionend', onSessionEnd);
+        renderer.xr.addEventListener('sessiongranted', () => updateStatus("Permission accordée - Scannez une surface"));
+        
+        // Démarrer la boucle de rendu
+        renderer.setAnimationLoop(render);
+    } catch (error) {
+        updateStatus("Erreur: " + error.message);
+        console.error(error);
+    }
+}
         
         function onSessionStart(session) {
             updateStatus("Session AR démarrée - Scannez une surface");
