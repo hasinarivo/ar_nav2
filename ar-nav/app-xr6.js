@@ -1,9 +1,55 @@
 let scene, camera, renderer;
 
+// ====================== ARButton intégré (copié) ======================
+const ARButton = {
+  createButton: function (renderer, sessionInit = {}) {
+    const button = document.createElement('button');
+    button.style.position = 'absolute';
+    button.style.bottom = '40px';
+    button.style.left = '50%';
+    button.style.transform = 'translateX(-50%)';
+    button.style.padding = '18px 40px';
+    button.style.fontSize = '1.4em';
+    button.style.zIndex = '1000';
+    button.style.background = '#0066ff';
+    button.style.color = 'white';
+    button.style.border = 'none';
+    button.style.borderRadius = '8px';
+    button.style.cursor = 'pointer';
+
+    function showStartButton() {
+      button.textContent = 'ENTRER EN AR';
+      button.onclick = () => {
+        renderer.xr.startSession('immersive-ar', sessionInit);
+      };
+    }
+
+    function showARNotSupported() {
+      button.textContent = 'AR NON SUPPORTÉ';
+      button.disabled = true;
+    }
+
+    if (!navigator.xr) {
+      showARNotSupported();
+      return button;
+    }
+
+    navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+      if (supported) {
+        showStartButton();
+      } else {
+        showARNotSupported();
+      }
+    }).catch(() => showARNotSupported());
+
+    return button;
+  }
+};
+
+// ====================== Le reste de l'application ======================
 function updateStatus(text) {
   const el = document.getElementById('status');
   if (el) el.innerHTML = text;
-  console.log(text);
 }
 
 async function init() {
@@ -23,27 +69,14 @@ async function init() {
 
     updateStatus("Création du bouton AR...");
 
-    if (typeof ARButton === "undefined") {
-      updateStatus("❌ ARButton non chargé");
-      return;
-    }
-
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ['local-floor', 'hit-test'],
       optionalFeatures: ['dom-overlay']
     });
 
-    arButton.style.position = 'absolute';
-    arButton.style.bottom = '40px';
-    arButton.style.left = '50%';
-    arButton.style.transform = 'translateX(-50%)';
-    arButton.style.zIndex = '1000';
-    arButton.style.padding = '16px 40px';
-    arButton.style.fontSize = '1.3em';
-
     document.body.appendChild(arButton);
 
-    updateStatus("✅ Prêt ! Appuie sur le bouton <strong>Enter AR</strong> en bas");
+    updateStatus("✅ Prêt !<br><strong>Appuie sur le bouton bleu ENTRER EN AR</strong>");
 
     renderer.setAnimationLoop(() => renderer.render(scene, camera));
 
