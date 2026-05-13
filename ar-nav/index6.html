@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav OSM</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; }
+    #ui {
+      position: absolute; top: 10px; left: 10px; color: white; 
+      background: rgba(0,0,0,0.8); padding: 15px; border-radius: 12px; 
+      z-index: 100; pointer-events: auto; max-width: 320px;
+    }
+    button { 
+      display: block; width: 100%; padding: 14px; margin: 8px 0; 
+      font-size: 1.1em; background: #0066ff; color: white; border: none; border-radius: 8px;
+    }
+    #status { margin-top: 10px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h2>🚀 AR Navigation</h2>
+    <div id="status">Chargement...</div>
+  </div>
+
+  <!-- Three.js version récente -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  
+  <!-- ARButton corrigé (chemin moderne) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/webxr/ARButton.js"></script>
+
+  <script src="app-xr6.js"></script>
+</body>
+</html>
