@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav - OSM Matching</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/opencv.js/4.5.5/opencv.min.js" async></script>
+</head>
+<body>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" class="overlay"></canvas>
+  
+  <div class="ui">
+    <div id="info">AR Navigation Piétonne</div>
+    <div id="match-score">Score : --%</div>
+    <button id="capture">Comparer avec OSM</button>
+    <div id="map-container">
+      <iframe id="osm-map" width="100%" height="200" frameborder="0"></iframe>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

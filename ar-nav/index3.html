@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav OSM - Flèches 3D</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial; }
+    #ui {
+      position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.7);
+      padding: 12px; border-radius: 10px; z-index: 100; pointer-events: auto;
+    }
+    button { padding: 12px 18px; margin: 5px 3px; font-size: 1.05em; }
+    #status { margin-top: 8px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h2>AR Navigation Piétonne</h2>
+    <button id="startAR">▶ Démarrer AR (WebXR)</button>
+    <button id="fetchOSM">🏢 Charger Bâtiments</button>
+    <button id="setDestination">🎯 Définir Destination</button>
+    <button id="clearArrows">🗑️ Effacer Flèches</button>
+    <div id="status">Prêt</div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/webxr/ARButton.js"></script>
+  <script src="app-xr3.js"></script>
+</body>
+</html>
