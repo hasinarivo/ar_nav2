@@ -1,5 +1,5 @@
 let scene, camera, renderer;
-let currentPosition = { lat: -18.8792, lon: 47.5079 }; // Antananarivo par défaut
+let currentPosition = { lat: -18.8792, lon: 47.5079 }; // Antananarivo
 let destination = null;
 let navigationArrows = [];
 
@@ -14,29 +14,36 @@ async function init() {
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
 
-  // Lumière
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8888ff, 1.2));
 
-  // Bouton AR officiel (recommandé)
+  // === CRÉATION DU BOUTON AR ===
   const arButton = ARButton.createButton(renderer, {
     requiredFeatures: ['local-floor', 'hit-test'],
     optionalFeatures: ['dom-overlay']
   });
+  
+  arButton.style.position = 'absolute';
+  arButton.style.bottom = '20px';
+  arButton.style.left = '50%';
+  arButton.style.transform = 'translateX(-50%)';
+  arButton.style.zIndex = '1000';
+  arButton.style.padding = '15px 30px';
+  arButton.style.fontSize = '1.2em';
+  
   document.body.appendChild(arButton);
 
   renderer.setAnimationLoop(animate);
 
-  // Attacher les boutons UI
   setupUI();
 
   // Position GPS
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
       currentPosition = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-      document.getElementById('status').innerHTML = `📍 Position acquise`;
-    }, () => {
-      document.getElementById('status').innerHTML = `📍 Position par défaut (Antananarivo)`;
-    });
+      updateStatus(`📍 Position acquise (${currentPosition.lat.toFixed(4)})`);
+    }, () => updateStatus("📍 Position par défaut"));
+  } else {
+    updateStatus("📍 Géolocalisation non supportée");
   }
 }
 
@@ -44,22 +51,22 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// ====================== FLÈCHES ======================
+function updateStatus(text) {
+  document.getElementById('status').innerHTML = text;
+}
+
+// ====================== FLÈCHES & NAVIGATION (simplifiées) ======================
 function createArrow() {
   const group = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.12, 3, 16),
-    new THREE.MeshPhongMaterial({ color: 0xffdd00 })
-  );
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
   body.rotation.x = Math.PI / 2;
   group.add(body);
 
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(0.35, 1.2, 16),
-    new THREE.MeshPhongMaterial({ color: 0xffdd00 })
-  );
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.3, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
   head.rotation.x = Math.PI / 2;
-  head.position.z = 2.1;
+  head.position.z = 2.2;
   group.add(head);
 
   return group;
@@ -67,34 +74,25 @@ function createArrow() {
 
 function updateNavigation() {
   if (!destination) return;
-
   const bearing = calculateBearing(currentPosition.lat, currentPosition.lon, destination.lat, destination.lon);
-  const angleRad = (bearing * Math.PI) / 180;
+  const angleRad = bearing * Math.PI / 180;
 
-  // Nettoyer anciennes flèches
   navigationArrows.forEach(a => scene.remove(a));
   navigationArrows = [];
 
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 5; i++) {
     const arrow = createArrow();
     arrow.rotation.y = angleRad;
-    arrow.position.set(
-      Math.sin(angleRad) * 2,
-      0.2,
-      -i * 6
-    );
+    arrow.position.set(Math.sin(angleRad) * 1.5, 0.3, -i * 7);
     scene.add(arrow);
     navigationArrows.push(arrow);
   }
-
-  document.getElementById('status').innerHTML = `→ Direction ${bearing.toFixed(0)}°`;
+  updateStatus(`→ Direction ${bearing.toFixed(0)}°`);
 }
 
 function calculateBearing(lat1, lon1, lat2, lon2) {
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const λ1 = lon1 * Math.PI / 180;
-  const λ2 = lon2 * Math.PI / 180;
+  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const λ1 = lon1 * Math.PI / 180, λ2 = lon2 * Math.PI / 180;
   const y = Math.sin(λ2-λ1) * Math.cos(φ2);
   const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
   let brng = Math.atan2(y, x) * 180 / Math.PI;
@@ -105,46 +103,39 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
 function setupUI() {
   const ui = document.getElementById('ui');
 
-  // Bouton Charger Bâtiments
-  const btnOSM = document.createElement('button');
-  btnOSM.textContent = '🏢 Charger Bâtiments OSM';
-  btnOSM.onclick = loadOSMBuildings;
-  ui.appendChild(btnOSM);
+  const buttons = [
+    { text: '🏢 Charger Bâtiments OSM', action: loadOSMBuildings },
+    { text: '🎯 Définir Destination', action: setDestination },
+    { text: '🗑️ Effacer Flèches', action: clearArrows }
+  ];
 
-  // Bouton Destination
-  const btnDest = document.createElement('button');
-  btnDest.textContent = '🎯 Définir Destination';
-  btnDest.onclick = setDestination;
-  ui.appendChild(btnDest);
-
-  // Effacer flèches
-  const btnClear = document.createElement('button');
-  btnClear.textContent = '🗑️ Effacer Flèches';
-  btnClear.onclick = () => {
-    navigationArrows.forEach(a => scene.remove(a));
-    navigationArrows = [];
-  };
-  ui.appendChild(btnClear);
+  buttons.forEach(btn => {
+    const b = document.createElement('button');
+    b.textContent = btn.text;
+    b.onclick = btn.action;
+    ui.appendChild(b);
+  });
 }
 
-// ====================== OSM (simplifié) ======================
 async function loadOSMBuildings() {
-  document.getElementById('status').textContent = "Chargement OSM...";
-  // À compléter avec ton code précédent de chargement Overpass + extrude
-  // Pour le moment on met juste un message
-  setTimeout(() => {
-    document.getElementById('status').innerHTML += "<br>✅ Bâtiments chargés (simulation)";
-  }, 800);
+  updateStatus("Chargement des bâtiments OSM...");
+  // TODO: Ajouter le vrai code Overpass ici plus tard
+  setTimeout(() => updateStatus("✅ Bâtiments chargés (simulation)"), 1000);
 }
 
 function setDestination() {
-  const lat = parseFloat(prompt("Latitude destination :", currentPosition.lat + 0.002));
-  const lon = parseFloat(prompt("Longitude destination :", currentPosition.lon + 0.002));
-  
-  if (lat && lon) {
+  const lat = parseFloat(prompt("Latitude de destination :", currentPosition.lat + 0.003));
+  const lon = parseFloat(prompt("Longitude de destination :", currentPosition.lon + 0.003));
+  if (!isNaN(lat) && !isNaN(lon)) {
     destination = { lat, lon };
     updateNavigation();
   }
+}
+
+function clearArrows() {
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+  updateStatus("Flèches effacées");
 }
 
 // ====================== LANCEMENT ======================
