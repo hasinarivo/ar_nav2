@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Détection de Façades - OpenCV.js | Points de Fuite & Quadrilatères</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    
+    #output-canvas {
+      z-index: 10;
+      pointer-events: none;
+    }
+    
+    #video-feed {
+      z-index: 1;
+      transform: scaleX(-1);
+    }
+    
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(10px);
+      padding: 15px;
+      border-radius: 12px;
+      z-index: 20;
+      color: white;
+      pointer-events: auto;
+      max-width: 320px;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    
+    button {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      margin: 8px 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1em;
+      font-weight: 600;
+      transition: transform 0.2s;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+    }
+    
+    #status {
+      margin-top: 10px;
+      font-size: 0.9em;
+      color: #4ecdc4;
+      font-family: monospace;
+    }
+    
+    .stats {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 11px;
+      z-index: 20;
+      pointer-events: none;
+    }
+    
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.9);
+      padding: 20px;
+      border-radius: 15px;
+      z-index: 100;
+      color: white;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <video id="video-feed" autoplay playsinline></video>
+    <canvas id="output-canvas"></canvas>
+    
+    <div id="ui">
+      <h2>🏢 Détection de Façades</h2>
+      <div id="status">⚙️ Initialisation OpenCV.js...</div>
+      <button id="toggle-detection">🔍 Activer Détection</button>
+      <button id="reset-view">🗑️ Effacer</button>
+    </div>
+    
+    <div class="stats" id="stats">
+      Façades: 0 | Lignes: 0
+    </div>
+  </div>
+  
+  <div id="loading" class="loading">
+    <div>📷 Chargement OpenCV.js...</div>
+    <div style="font-size:12px; margin-top:10px;">Patientez quelques secondes</div>
+  </div>
+
+  <script async defer src="https://docs.opencv.org/4.8.0/opencv.js"></script>
+  
+  <script>
+    // Configuration globale
+    let video = null;
+    let canvas = null;
+    let ctx = null;
+    let stream = null;
+    let detectionActive = false;
+    let animationId = null;
+    let opencvReady = false;
+    
+    // Paramètres de détection
+    const params = {
+      cannyThreshold1: 50,
+      cannyThreshold2: 150,
+      houghThreshold: 100,
+      minLineLength: 80,
+      maxLineGap: 20,
+      angleTolerance: 15,  // Tolérance pour lignes verticales/horizontales (degrés)
+      vanishingPointClusters: 3,
+      minFacadeArea: 5000
+    };
+    
+    // Stockage des détections
+    let currentFacades = [];
+    let allLines = [];
+    
+    // ====================== INITIALISATION ======================
+    async function init() {
+      await initOpenCV();
+      await initCamera();
+      setupEventListeners();
+      startProcessing();
+    }
+    
+    function initOpenCV() {
+      return new Promise((resolve) => {
+        if (typeof cv !== 'undefined') {
+          cv.onRuntimeInitialized = () => {
+            console.log('OpenCV.js prêt');
+            opencvReady = true;
+            document.getElementById('loading').style.display = 'none';
+            updateStatus('✅ OpenCV prêt - Caméra en cours...');
+            resolve();
+          };
+        } else {
+          setTimeout(() => initOpenCV(), 100);
+        }
+      });
+    }
+    
+    async function initCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+        
+        video = document.getElementById('video-feed');
+        video.srcObject = stream;
+        await video.play();
+        
+        canvas = document.getElementById('output-canvas');
+        ctx = canvas.getContext('2d');
+        
+        updateStatus('🎥 Caméra active - Prêt pour détection');
+      } catch (err) {
+        console.error('Erreur caméra:', err);
+        updateStatus('❌ Erreur accès caméra');
+      }
+    }
+    
+    function setupEventListeners() {
+      document.getElementById('toggle-detection').onclick = () => {
+        detectionActive = !detectionActive;
+        document.getElementById('toggle-detection').textContent = 
+          detectionActive ? '⏸️ Pause Détection' : '🔍 Activer Détection';
+        updateStatus(detectionActive ? '🔍 Détection active' : '⏸️ Détection en pause');
+      };
+      
+      document.getElementById('reset-view').onclick = () => {
+        currentFacades = [];
+        allLines = [];
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        updateStats(0, 0);
+        updateStatus('🧹 Affichage nettoyé');
+      };
+    }
+    
+    // ====================== ALGORITHME PRINCIPAL ======================
+    async function startProcessing() {
+      const processFrame = async () => {
+        if (!video || video.readyState !== 4 || !opencvReady) {
+          requestAnimationFrame(processFrame);
+          return;
+        }
+        
+        // Mise à jour taille canvas
+        if (canvas.width !== video.videoWidth) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        }
+        
+        if (detectionActive) {
+          await detectFacades();
+        } else {
+          // Juste afficher la vidéo sans détection
+          if (ctx) {
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+            ctx.restore();
+          }
+        }
+        
+        requestAnimationFrame(processFrame);
+      };
+      
+      processFrame();
+    }
+    
+    async function detectFacades() {
+      if (!video || !cv) return;
+      
+      try {
+        // Capture image depuis la vidéo
+        let src = cv.imread(video);
+        
+        // Convertir en niveaux de gris
+        let gray = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+        
+        // 1. Détection des contours avec Canny
+        let edges = new cv.Mat();
+        cv.Canny(gray, edges, params.cannyThreshold1, params.cannyThreshold2, 3, false);
+        
+        // 2. Détection des lignes avec Hough Transform
+        let lines = new cv.Mat();
+        cv.HoughLinesP(edges, lines, 1, Math.PI / 180, params.houghThreshold, 
+                       params.minLineLength, params.maxLineGap);
+        
+        // 3. Extraction et classification des lignes
+        const lineData = extractLines(lines);
+        allLines = lineData.all;
+        
+        // 4. Calcul des points de fuite
+        const vanishingPoints = findVanishingPoints(lineData.vertical, lineData.horizontal);
+        
+        // 5. Détection des quadrilatères de façade
+        currentFacades = detectFacadeQuadrilaterals(lineData.vertical, lineData.horizontal, vanishingPoints);
+        
+        // 6. Visualisation
+        drawResults(src, lineData, vanishingPoints, currentFacades);
+        
+        // Nettoyage mémoire
+        src.delete();
+        gray.delete();
+        edges.delete();
+        lines.delete();
+        
+        // Mise à jour stats
+        updateStats(currentFacades.length, lineData.all.length);
+        
+      } catch (err) {
+        console.error('Erreur détection:', err);
+      }
+    }
+    
+    // ====================== EXTRACTION DES LIGNES ======================
+    function extractLines(linesMat) {
+      const vertical = [];
+      const horizontal = [];
+      const all = [];
+      
+      for (let i = 0; i < linesMat.rows; i++) {
+        const x1 = linesMat.data32S[i * 4];
+        const y1 = linesMat.data32S[i * 4 + 1];
+        const x2 = linesMat.data32S[i * 4 + 2];
+        const y2 = linesMat.data32S[i * 4 + 3];
+        
+        // Calcul de l'angle en degrés
+        let angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+        angle = Math.abs(angle);
+        
+        // Normalisation entre 0 et 90 degrés
+        if (angle > 90) angle = 180 - angle;
+        
+        const line = { x1, y1, x2, y2, angle, length: Math.hypot(x2 - x1, y2 - y1) };
+        all.push(line);
+        
+        // Classification : vertical (angle proche de 90°) ou horizontal (angle proche de 0°)
+        if (Math.abs(angle - 90) < params.angleTolerance) {
+          vertical.push(line);
+        } else if (angle < params.angleTolerance) {
+          horizontal.push(line);
+        }
+      }
+      
+      return { vertical, horizontal, all };
+    }
+    
+    // ====================== POINTS DE FUITE ======================
+    function findVanishingPoints(verticalLines, horizontalLines) {
+      const vanishingPoints = {
+        vertical: null,
+        horizontal: null
+      };
+      
+      // Point de fuite pour les lignes verticales (convergence vers un point)
+      if (verticalLines.length > 2) {
+        vanishingPoints.vertical = computeVanishingPoint(verticalLines);
+      }
+      
+      // Point de fuite pour les lignes horizontales
+      if (horizontalLines.length > 2) {
+        vanishingPoints.horizontal = computeVanishingPoint(horizontalLines);
+      }
+      
+      return vanishingPoints;
+    }
+    
+    function computeVanishingPoint(lines) {
+      // Méthode des moindres carrés pour trouver l'intersection optimale
+      let A = [];
+      let B = [];
+      
+      lines.forEach(line => {
+        // Équation de la ligne : ax + by = c
+        const a = line.y2 - line.y1;
+        const b = line.x1 - line.x2;
+        const c = a * line.x1 + b * line.y1;
+        
+        A.push([a, b]);
+        B.push(c);
+      });
+      
+      // Résolution par pseudo-inverse (méthode simplifiée)
+      if (A.length >= 2) {
+        try {
+          // Calcul du point d'intersection optimal
+          let sum_a2 = 0, sum_ab = 0, sum_b2 = 0, sum_ac = 0, sum_bc = 0;
+          
+          for (let i = 0; i < A.length; i++) {
+            const a = A[i][0];
+            const b = A[i][1];
+            const c = B[i];
+            
+            sum_a2 += a * a;
+            sum_ab += a * b;
+            sum_b2 += b * b;
+            sum_ac += a * c;
+            sum_bc += b * c;
+          }
+          
+          const det = sum_a2 * sum_b2 - sum_ab * sum_ab;
+          
+          if (Math.abs(det) > 1e-6) {
+            const x = (sum_ac * sum_b2 - sum_ab * sum_bc) / det;
+            const y = (sum_a2 * sum_bc - sum_ab * sum_ac) / det;
+            
+            // Vérifier si le point est dans l'image
+            if (x > -canvas.width && x < canvas.width * 2 && 
+                y > -canvas.height && y < canvas.height * 2) {
+              return { x, y };
+            }
+          }
+        } catch(e) {
+          console.warn('Erreur calcul point de fuite:', e);
+        }
+      }
+      
+      return null;
+    }
+    
+    // ====================== DÉTECTION DES QUADRILATÈRES ======================
+    function detectFacadeQuadrilaterals(verticalLines, horizontalLines, vanishingPoints) {
+      const facades = [];
+      
+      if (verticalLines.length < 2 || horizontalLines.length < 2) return facades;
+      
+      // Grouper les lignes par proximité
+      const verticalGroups = groupLinesByProximity(verticalLines, 'vertical');
+      const horizontalGroups = groupLinesByProximity(horizontalLines, 'horizontal');
+      
+      // Pour chaque combinaison de groupes, créer un quadrilatère
+      for (const vGroup of verticalGroups) {
+        for (const hGroup of horizontalGroups) {
+          const quadrilateral = createQuadrilateral(vGroup, hGroup, vanishingPoints);
+          
+          if (quadrilateral && isValidFacade(quadrilateral)) {
+            facades.push(quadrilateral);
+          }
+        }
+      }
+      
+      // Filtrer les doublons et trier par taille
+      return filterDuplicateFacades(facades);
+    }
+    
+    function groupLinesByProximity(lines, orientation) {
+      if (lines.length === 0) return [];
+      
+      const groups = [];
+      const used = new Set();
+      
+      for (let i = 0; i < lines.length; i++) {
+        if (used.has(i)) continue;
+        
+        const group = [lines[i]];
+        used.add(i);
+        
+        for (let j = i + 1; j < lines.length; j++) {
+          if (used.has(j)) continue;
+          
+          // Calcul de la distance entre lignes
+          const distance = orientation === 'vertical' 
+            ? Math.abs(lines[i].x1 - lines[j].x1)
+            : Math.abs(lines[i].y1 - lines[j].y1);
+          
+          if (distance < 50) {  // Seuil de regroupement
+            group.push(lines[j]);
+            used.add(j);
+          }
+        }
+        
+        groups.push(group);
+      }
+      
+      return groups;
+    }
+    
+    function createQuadrilateral(verticalGroup, horizontalGroup, vanishingPoints) {
+      // Trouver les lignes extrêmes
+      const leftLine = verticalGroup.reduce((min, line) => line.x1 < min.x1 ? line : min, verticalGroup[0]);
+      const rightLine = verticalGroup.reduce((max, line) => line.x1 > max.x1 ? line : max, verticalGroup[0]);
+      const topLine = horizontalGroup.reduce((min, line) => line.y1 < min.y1 ? line : min, horizontalGroup[0]);
+      const bottomLine = horizontalGroup.reduce((max, line) => line.y1 > max.y1 ? line : max, horizontalGroup[0]);
+      
+      // Calcul des 4 coins par intersection des lignes
+      const topLeft = lineIntersection(leftLine, topLine);
+      const topRight = lineIntersection(rightLine, topLine);
+      const bottomLeft = lineIntersection(leftLine, bottomLine);
+      const bottomRight = lineIntersection(rightLine, bottomLine);
+      
+      // Vérifier que tous les points sont valides
+      if (!topLeft || !topRight || !bottomLeft || !bottomRight) return null;
+      
+      // Ajuster avec les points de fuite si disponibles
+      const adjustedCorners = adjustWithVanishingPoints(
+        [topLeft, topRight, bottomLeft, bottomRight], 
+        vanishingPoints
+      );
+      
+      return {
+        corners: adjustedCorners,
+        center: {
+          x: (topLeft.x + topRight.x + bottomLeft.x + bottomRight.x) / 4,
+          y: (topLeft.y + topRight.y + bottomLeft.y + bottomRight.y) / 4
+        },
+        area: computeArea(adjustedCorners)
+      };
+    }
+    
+    function lineIntersection(line1, line2) {
+      // Intersection de deux segments de ligne
+      const a1 = line1.y2 - line1.y1;
+      const b1 = line1.x1 - line1.x2;
+      const c1 = a1 * line1.x1 + b1 * line1.y1;
+      
+      const a2 = line2.y2 - line2.y1;
+      const b2 = line2.x1 - line2.x2;
+      const c2 = a2 * line2.x1 + b2 * line2.y1;
+      
+      const det = a1 * b2 - a2 * b1;
+      
+      if (Math.abs(det) < 1e-6) return null;
+      
+      const x = (b2 * c1 - b1 * c2) / det;
+      const y = (a1 * c2 - a2 * c1) / det;
+      
+      return { x, y };
+    }
+    
+    function adjustWithVanishingPoints(corners, vanishingPoints) {
+      let adjusted = [...corners];
+      
+      // Ajuster les coins supérieurs avec le point de fuite vertical
+      if (vanishingPoints.vertical) {
+        const vp = vanishingPoints.vertical;
+        
+        // Les lignes verticales convergent vers le point de fuite
+        const topLeftToVP = { x: vp.x - corners[0].x, y: vp.y - corners[0].y };
+        const topRightToVP = { x: vp.x - corners[1].x, y: vp.y - corners[1].y };
+        
+        // Ajustement proportionnel
+        const t = 0.3; // Facteur d'ajustement
+        adjusted[0].x += topLeftToVP.x * t;
+        adjusted[0].y += topLeftToVP.y * t;
+        adjusted[1].x += topRightToVP.x * t;
+        adjusted[1].y += topRightToVP.y * t;
+      }
+      
+      return adjusted;
+    }
+    
+    function isValidFacade(quadrilateral) {
+      // Vérifier la superficie minimale
+      if (quadrilateral.area < params.minFacadeArea) return false;
+      
+      // Vérifier que les angles sont cohérents (pas trop déformé)
+      const corners = quadrilateral.corners;
+      const angles = [];
+      
+      for (let i = 0; i < 4; i++) {
+        const p1 = corners[i];
+        const p2 = corners[(i+1)%4];
+        const p3 = corners[(i+2)%4];
+        
+        const angle = computeAngle(p1, p2, p3);
+        angles.push(angle);
+      }
+      
+      // Un quadrilatère valide a des angles proches de 90°
+      const avgAngle = angles.reduce((a,b) => a+b, 0) / 4;
+      return Math.abs(avgAngle - 90) < 45; // Tolérance de 45 degrés
+    }
+    
+    function computeAngle(p1, p2, p3) {
+      const v1 = { x: p1.x - p2.x, y: p1.y - p2.y };
+      const v2 = { x: p3.x - p2.x, y: p3.y - p2.y };
+      
+      const dot = v1.x * v2.x + v1.y * v2.y;
+      const mag1 = Math.hypot(v1.x, v1.y);
+      const mag2 = Math.hypot(v2.x, v2.y);
+      
+      const angle = Math.acos(dot / (mag1 * mag2)) * 180 / Math.PI;
+      return Math.min(angle, 180 - angle);
+    }
+    
+    function computeArea(corners) {
+      // Formule du quadrilatère (décomposition en deux triangles)
+      const area1 = Math.abs(
+        (corners[0].x * (corners[1].y - corners[2].y) +
+         corners[1].x * (corners[2].y - corners[0].y) +
+         corners[2].x * (corners[0].y - corners[1].y)) / 2
+      );
+      
+      const area2 = Math.abs(
+        (corners[0].x * (corners[2].y - corners[3].y) +
+         corners[2].x * (corners[3].y - corners[0].y) +
+         corners[3].x * (corners[0].y - corners[2].y)) / 2
+      );
+      
+      return area1 + area2;
+    }
+    
+    function filterDuplicateFacades(facades) {
+      // Filtrer les quadrilatères qui se chevauchent trop
+      facades.sort((a,b) => b.area - a.area);
+      
+      const unique = [];
+      const threshold = 0.5; // Chevauchenment maximum
+      
+      for (const facade of facades) {
+        let duplicate = false;
+        
+        for (const existing of unique) {
+          const overlap = computeOverlap(facade.corners, existing.corners);
+          if (overlap > threshold) {
+            duplicate = true;
+            break;
+          }
+        }
+        
+        if (!duplicate) {
+          unique.push(facade);
+        }
+        
+        if (unique.length >= 5) break; // Maximum 5 façades
+      }
+      
+      return unique;
+    }
+    
+    function computeOverlap(corners1, corners2) {
+      // Calcul simplifié du chevauchement des boîtes englobantes
+      const box1 = getBoundingBox(corners1);
+      const box2 = getBoundingBox(corners2);
+      
+      const intersectX = Math.max(0, Math.min(box1.maxX, box2.maxX) - Math.max(box1.minX, box2.minX));
+      const intersectY = Math.max(0, Math.min(box1.maxY, box2.maxY) - Math.max(box1.minY, box2.minY));
+      const intersectArea = intersectX * intersectY;
+      
+      const area1 = computeArea(corners1);
+      const area2 = computeArea(corners2);
+      
+      return intersectArea / Math.min(area1, area2);
+    }
+    
+    function getBoundingBox(corners) {
+      return {
+        minX: Math.min(...corners.map(c => c.x)),
+        maxX: Math.max(...corners.map(c => c.x)),
+        minY: Math.min(...corners.map(c => c.y)),
+        maxY: Math.max(...corners.map(c => c.y))
+      };
+    }
+    
+    // ====================== VISUALISATION ======================
+    function drawResults(srcMat, linesData, vanishingPoints, facades) {
+      if (!ctx) return;
+      
+      // Afficher la vidéo
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+      ctx.restore();
+      
+      // Dessiner les lignes détectées
+      ctx.save();
+      ctx.scale(-1, 1);
+      
+      // Lignes verticales (rouges)
+      ctx.beginPath();
+      ctx.strokeStyle = '#ff4444';
+      ctx.lineWidth = 2;
+      linesData.vertical.forEach(line => {
+        ctx.beginPath();
+        ctx.moveTo(-line.x1, line.y1);
+        ctx.lineTo(-line.x2, line.y2);
+        ctx.stroke();
+      });
+      
+      // Lignes horizontales (vertes)
+      ctx.beginPath();
+      ctx.strokeStyle = '#44ff44';
+      ctx.lineWidth = 2;
+      linesData.horizontal.forEach(line => {
+        ctx.beginPath();
+        ctx.moveTo(-line.x1, line.y1);
+        ctx.lineTo(-line.x2, line.y2);
+        ctx.stroke();
+      });
+      
+      // Points de fuite
+      if (vanishingPoints.vertical) {
+        ctx.beginPath();
+        ctx.fillStyle = '#ff0000';
+        ctx.arc(-vanishingPoints.vertical.x, vanishingPoints.vertical.y, 8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText('PF Vert', -vanishingPoints.vertical.x + 10, vanishingPoints.vertical.y - 10);
+      }
+      
+      if (vanishingPoints.horizontal) {
+        ctx.beginPath();
+        ctx.fillStyle = '#00ff00';
+        ctx.arc(-vanishingPoints.horizontal.x, vanishingPoints.horizontal.y, 8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = 'white';
+        ctx.fillText('PF Hor', -vanishingPoints.horizontal.x + 10, vanishingPoints.horizontal.y - 10);
+      }
+      
+      // Quadrilatères des façades
+      facades.forEach((facade, idx) => {
+        const corners = facade.corners;
+        const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7'];
+        const color = colors[idx % colors.length];
+        
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.fillStyle = `${color}33`;
+        
+        ctx.moveTo(-corners[0].x, corners[0].y);
+        for (let i = 1; i < corners.length; i++) {
+          ctx.lineTo(-corners[i].x, corners[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        // Dessiner les coins
+        corners.forEach(corner => {
+          ctx.beginPath();
+          ctx.fillStyle = color;
+          ctx.arc(-corner.x, corner.y, 6, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+        
+        // Numéro de la façade
+        ctx.fillStyle = color;
+        ctx.font = 'bold 18px monospace';
+        ctx.shadowBlur = 4;
+        ctx.fillText(`${idx + 1}`, -facade.center.x, facade.center.y);
+        ctx.shadowBlur = 0;
+      });
+      
+      ctx.restore();
+    }
+    
+    function updateStatus(msg) {
+      const statusDiv = document.getElementById('status');
+      statusDiv.innerHTML = `📡 ${msg}`;
+      console.log(msg);
+    }
+    
+    function updateStats(facadeCount, lineCount) {
+      const statsDiv = document.getElementById('stats');
+      statsDiv.innerHTML = `🏢 Façades: ${facadeCount} | 📏 Lignes: ${lineCount}`;
+    }
+    
+    // Démarrer l'application
+    init();
+  </script>
+</body>
+</html>
