@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Navigation Piétonne - Localisation Visuelle avec Gaussian Splatting</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        /* Interface utilisateur */
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        
+        .panel {
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 15px 20px;
+            color: white;
+            pointer-events: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            font-weight: 600;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        #status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 15px;
+            border-radius: 10px;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 100;
+            pointer-events: none;
+            border-left: 3px solid #0f0;
+        }
+        
+        #camera-feed {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            border-radius: 10px;
+            border: 2px solid #667eea;
+            z-index: 90;
+            background: #000;
+            display: none;
+        }
+        
+        .info-text {
+            font-size: 14px;
+            margin-top: 10px;
+            color: #ccc;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            padding: 20px;
+            border-radius: 15px;
+            color: white;
+            z-index: 200;
+            text-align: center;
+            pointer-events: none;
+        }
+        
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        #detection-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 50;
+        }
+        
+        @media (max-width: 768px) {
+            button { padding: 8px 16px; font-size: 14px; }
+            .panel { padding: 10px 15px; }
+            .info-text { font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="panel">
+            <h2>🚶 Navigation Piétonne</h2>
+            <div id="location-info">📍 Localisation: En cours...</div>
+            <div id="facade-info">🏢 Façades détectées: 0</div>
+            <div class="info-text">📱 Activez la caméra pour la localisation visuelle</div>
+        </div>
+    </div>
+    
+    <div id="status">
+        🟢 Système prêt<br>
+        🎯 Localisation visuelle: inactive
+    </div>
+    
+    <div id="controls">
+        <button id="start-camera">📷 Activer Caméra</button>
+        <button id="detect-facades">🔍 Détecter Façades</button>
+        <button id="start-nav">🎯 Démarrer Navigation</button>
+    </div>
+    
+    <div id="camera-feed">
+        <video id="video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+    </div>
+    
+    <canvas id="detection-canvas"></canvas>
+    
+    <div id="loading" class="loading" style="display:none;">
+        <div class="spinner"></div>
+        <div>Traitement en cours...</div>
+    </div>
+
+    <!-- Scripts externes -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+                "gsplat": "https://unpkg.com/gsplat@1.0.0/dist/gsplat.es.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import * as GSplat from 'gsplat';
+        
+        // Configuration de l'application
+        class NavigationApp {
+            constructor() {
+                this.video = null;
+                this.stream = null;
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.gaussianSplatting = null;
+                this.detections = [];
+                this.isProcessing = false;
+                this.userPosition = { x: 0, z: 0, rotation: 0 };
+                this.facades = [];
+                
+                this.init();
+            }
+            
+            async init() {
+                this.setupThreeJS();
+                this.setupEventListeners();
+                await this.loadGaussianSplatting();
+                this.updateUI();
+            }
+            
+            setupThreeJS() {
+                // Création de la scène 3D
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x111122);
+                this.scene.fog = new THREE.FogExp2(0x111122, 0.008);
+                
+                // Caméra pour la visualisation 3D
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(5, 3, 5);
+                this.camera.lookAt(0, 0, 0);
+                
+                // Renderer
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                document.body.appendChild(this.renderer.domElement);
+                
+                // Ajout de la grille et du sol
+                const gridHelper = new THREE.GridHelper(100, 20, 0x88aaff, 0x335588);
+                gridHelper.position.y = -0.5;
+                this.scene.add(gridHelper);
+                
+                // Ajout d'un sol semi-transparent
+                const groundPlane = new THREE.Mesh(
+                    new THREE.PlaneGeometry(100, 100),
+                    new THREE.MeshStandardMaterial({ color: 0x1a1a2e, roughness: 0.8, metalness: 0.2, transparent: true, opacity: 0.3 })
+                );
+                groundPlane.rotation.x = -Math.PI / 2;
+                groundPlane.position.y = -0.5;
+                groundPlane.receiveShadow = true;
+                this.scene.add(groundPlane);
+                
+                // Éclairage
+                const ambientLight = new THREE.AmbientLight(0x404060);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+                directionalLight.position.set(10, 20, 5);
+                directionalLight.castShadow = true;
+                directionalLight.shadow.mapSize.width = 1024;
+                directionalLight.shadow.mapSize.height = 1024;
+                this.scene.add(directionalLight);
+                
+                const backLight = new THREE.PointLight(0x4466cc, 0.5);
+                backLight.position.set(-5, 5, -5);
+                this.scene.add(backLight);
+                
+                // Particules pour l'effet de navigation
+                const particleGeometry = new THREE.BufferGeometry();
+                const particleCount = 500;
+                const particlePositions = new Float32Array(particleCount * 3);
+                for (let i = 0; i < particleCount; i++) {
+                    particlePositions[i*3] = (Math.random() - 0.5) * 100;
+                    particlePositions[i*3+1] = Math.random() * 10;
+                    particlePositions[i*3+2] = (Math.random() - 0.5) * 100;
+                }
+                particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+                const particleMaterial = new THREE.PointsMaterial({ color: 0x88aaff, size: 0.05 });
+                const particles = new THREE.Points(particleGeometry, particleMaterial);
+                this.scene.add(particles);
+                
+                // Animation
+                this.animate();
+            }
+            
+            async loadGaussianSplatting() {
+                try {
+                    // Création de démonstration de Gaussian Splatting avec des primitives
+                    const group = new THREE.Group();
+                    
+                    // Génération de splats gaussiens pour simuler des façades
+                    const colors = [0xff6b6b, 0x4ecdc4, 0x45b7d1, 0x96ceb4, 0xffeaa7];
+                    
+                    for (let i = 0; i < 200; i++) {
+                        const size = 0.1 + Math.random() * 0.3;
+                        const geometry = new THREE.SphereGeometry(size, 8, 8);
+                        const material = new THREE.MeshStandardMaterial({
+                            color: colors[Math.floor(Math.random() * colors.length)],
+                            emissive: 0x222222,
+                            roughness: 0.3,
+                            metalness: 0.7,
+                            transparent: true,
+                            opacity: 0.7
+                        });
+                        const splat = new THREE.Mesh(geometry, material);
+                        
+                        // Position aléatoire représentant des points d'intérêt
+                        const angle = Math.random() * Math.PI * 2;
+                        const radius = 5 + Math.random() * 15;
+                        splat.position.x = Math.cos(angle) * radius;
+                        splat.position.z = Math.sin(angle) * radius;
+                        splat.position.y = Math.random() * 3;
+                        
+                        group.add(splat);
+                    }
+                    
+                    this.scene.add(group);
+                    this.gaussianSplatting = group;
+                    
+                    console.log('Gaussian Splatting chargé avec succès');
+                    this.updateStatus('Gaussian Splatting actif', '#0f0');
+                } catch (error) {
+                    console.error('Erreur chargement Gaussian Splatting:', error);
+                    this.updateStatus('Erreur GSplat', '#f00');
+                }
+            }
+            
+            setupEventListeners() {
+                document.getElementById('start-camera').addEventListener('click', () => this.startCamera());
+                document.getElementById('detect-facades').addEventListener('click', () => this.detectFacades());
+                document.getElementById('start-nav').addEventListener('click', () => this.startNavigation());
+                
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+            
+            async startCamera() {
+                try {
+                    const videoElement = document.getElementById('video');
+                    this.stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            facingMode: 'environment',
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        } 
+                    });
+                    
+                    videoElement.srcObject = this.stream;
+                    document.getElementById('camera-feed').style.display = 'block';
+                    this.updateStatus('📷 Caméra active', '#0f0');
+                    
+                    // Simulation de détection de façade après activation
+                    setTimeout(() => this.simulateFacadeDetection(), 1000);
+                } catch (error) {
+                    console.error('Erreur accès caméra:', error);
+                    this.updateStatus('❌ Erreur caméra', '#f00');
+                    alert('Impossible d\'accéder à la caméra. Veuillez vérifier les permissions.');
+                }
+            }
+            
+            simulateFacadeDetection() {
+                // Simulation de détection de façades avec DeepLSD
+                const facadeCount = Math.floor(Math.random() * 5) + 3;
+                this.detections = [];
+                
+                for (let i = 0; i < facadeCount; i++) {
+                    this.detections.push({
+                        id: i,
+                        confidence: 0.7 + Math.random() * 0.3,
+                        position: {
+                            x: (Math.random() - 0.5) * 20,
+                            z: (Math.random() - 0.5) * 15 + 5
+                        }
+                    });
+                }
+                
+                document.getElementById('facade-info').innerHTML = `🏢 Façades détectées: ${facadeCount}`;
+                this.visualizeFacades();
+                this.updateStatus(`🎯 ${facadeCount} façades détectées`, '#0f0');
+            }
+            
+            async detectFacades() {
+                if (!this.stream) {
+                    alert('Veuillez d\'abord activer la caméra');
+                    return;
+                }
+                
+                this.showLoading(true);
+                this.updateStatus('🔍 Détection en cours...', '#ff0');
+                
+                // Simulation du processus DeepLSD
+                await this.simulateDeepLSD();
+                
+                this.showLoading(false);
+                this.simulateFacadeDetection();
+            }
+            
+            async simulateDeepLSD() {
+                // Simulation du temps de traitement DeepLSD
+                return new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            
+            visualizeFacades() {
+                // Visualisation des façades détectées dans la scène 3D
+                // Supprimer les anciennes visualisations
+                const oldFacades = this.scene.children.filter(child => child.userData && child.userData.isFacade);
+                oldFacades.forEach(facade => this.scene.remove(facade));
+                
+                this.facades = [];
+                
+                this.detections.forEach(detection => {
+                    const boxGeometry = new THREE.BoxGeometry(1.5, 3, 0.2);
+                    const material = new THREE.MeshStandardMaterial({ 
+                        color: 0x44aaff, 
+                        emissive: 0x224466,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    const facadeMesh = new THREE.Mesh(boxGeometry, material);
+                    facadeMesh.position.set(detection.position.x, 1.5, detection.position.z);
+                    facadeMesh.castShadow = true;
+                    facadeMesh.userData = { isFacade: true, id: detection.id };
+                    
+                    // Ajout d'un contour
+                    const edges = new THREE.EdgesGeometry(boxGeometry);
+                    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x88ccff }));
+                    facadeMesh.add(line);
+                    
+                    this.scene.add(facadeMesh);
+                    this.facades.push(facadeMesh);
+                });
+            }
+            
+            startNavigation() {
+                if (this.facades.length === 0) {
+                    alert('Aucune façade détectée. Lancez d\'abord la détection.');
+                    return;
+                }
+                
+                this.updateStatus('🚶 Navigation en cours...', '#0f0');
+                
+                // Simuler la navigation avec des points de cheminement
+                this.createNavigationPath();
+                
+                // Animation de la caméra 3D pour suivre le chemin
+                this.animateNavigation();
+            }
+            
+            createNavigationPath() {
+                // Créer un chemin basé sur les façades détectées
+                const pathPoints = [];
+                this.facades.forEach(facade => {
+                    pathPoints.push(facade.position.clone());
+                });
+                
+                // Trier les points pour créer un chemin logique
+                pathPoints.sort((a, b) => a.x - b.x);
+                
+                // Créer une ligne représentant le chemin
+                const lineGeometry = new THREE.BufferGeometry();
+                const vertices = [];
+                pathPoints.forEach(point => {
+                    vertices.push(point.x, point.y - 1, point.z);
+                });
+                lineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+                const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffaa44 });
+                const pathLine = new THREE.Line(lineGeometry, lineMaterial);
+                this.scene.add(pathLine);
+                
+                // Ajouter des marqueurs de chemin
+                pathPoints.forEach((point, index) => {
+                    const markerGeo = new THREE.SphereGeometry(0.15, 16, 16);
+                    const markerMat = new THREE.MeshStandardMaterial({ color: 0xffaa44, emissive: 0x442200 });
+                    const marker = new THREE.Mesh(markerGeo, markerMat);
+                    marker.position.copy(point);
+                    marker.position.y -= 1;
+                    this.scene.add(marker);
+                });
+            }
+            
+            animateNavigation() {
+                let step = 0;
+                const totalSteps = 200;
+                const startPos = this.camera.position.clone();
+                const endPos = new THREE.Vector3(0, 3, 0);
+                
+                const animateStep = () => {
+                    if (step < totalSteps) {
+                        const t = step / totalSteps;
+                        // Mouvement circulaire autour de la zone
+                        const angle = t * Math.PI * 2;
+                        const radius = 8;
+                        this.camera.position.x = Math.cos(angle) * radius;
+                        this.camera.position.z = Math.sin(angle) * radius;
+                        this.camera.position.y = 3 + Math.sin(angle * 2) * 1;
+                        this.camera.lookAt(0, 1, 0);
+                        
+                        step++;
+                        requestAnimationFrame(animateStep);
+                    } else {
+                        this.camera.position.set(5, 3, 5);
+                        this.camera.lookAt(0, 0, 0);
+                        this.updateStatus('✅ Navigation terminée', '#0f0');
+                    }
+                };
+                
+                animateStep();
+            }
+            
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Rotation des splats gaussiens
+                if (this.gaussianSplatting) {
+                    this.gaussianSplatting.rotation.y += 0.003;
+                }
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            updateStatus(message, color = '#fff') {
+                const statusDiv = document.getElementById('status');
+                const lines = statusDiv.innerHTML.split('<br>');
+                lines[0] = message.includes('🟢') ? message : `🟢 ${message}`;
+                statusDiv.innerHTML = lines.join('<br>');
+                statusDiv.style.borderLeftColor = color;
+            }
+            
+            updateUI() {
+                setInterval(() => {
+                    // Mise à jour périodique de l'UI
+                    const locationText = document.getElementById('location-info');
+                    if (this.facades.length > 0) {
+                        locationText.innerHTML = `📍 Position: ${(Math.random() * 100).toFixed(1)}m, ${(Math.random() * 360).toFixed(0)}°`;
+                    }
+                }, 3000);
+            }
+            
+            showLoading(show) {
+                const loadingDiv = document.getElementById('loading');
+                loadingDiv.style.display = show ? 'flex' : 'none';
+            }
+        }
+        
+        // Initialisation de l'application
+        const app = new NavigationApp();
+        
+        // Instructions supplémentaires dans la console
+        console.log('%c🚀 Application de Navigation Piétonne avec Gaussian Splatting', 'color: #667eea; font-size: 16px; font-weight: bold;');
+        console.log('%c📱 DeepLSD simulé pour la détection des façades', 'color: #4ecdc4;');
+        console.log('%c🎨 Visualisation 3D avec Three.js et Gaussian Splatting', 'color: #ff6b6b;');
+    </script>
+</body>
+</html>
