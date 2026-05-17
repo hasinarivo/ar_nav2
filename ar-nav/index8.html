@@ -269,7 +269,7 @@ function distance(pos1, pos2) {
 async function loadOSMBuildings() {
   updateStatus("Chargement bâtiments OSM...");
   
-  const radius = 0.003;
+  const radius = 0.001; // ~110m
   const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
   
   try {
