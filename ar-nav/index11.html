@@ -295,6 +295,7 @@ async function init() {
   renderer.domElement.style.top = '0';
   renderer.domElement.style.left = '0';
   renderer.domElement.style.zIndex = '1';
+  renderer.domElement.style.pointerEvents = 'none';
 
   // Créer un groupe pour le sol (plan inclinable)
   groundGroup = new THREE.Group();
