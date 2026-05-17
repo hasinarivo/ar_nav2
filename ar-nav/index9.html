@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav OSM - Contrôles dans l'AR</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; }
+    
+    /* Conteneur principal AR */
+    #ar-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* Canvas Three.js */
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    
+    /* Panneau de contrôle AR - Semi-transparent et flottant */
+    #ar-controls {
+      position: absolute;
+      bottom: 20px;
+      left: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(15px);
+      border-radius: 16px;
+      padding: 12px;
+      z-index: 200;
+      pointer-events: auto;
+      border: 1px solid rgba(255,255,255,0.2);
+      transition: transform 0.3s ease;
+      max-height: 40%;
+      overflow-y: auto;
+    }
+    
+    /* Version réduite du panneau */
+    #ar-controls.collapsed {
+      max-height: 60px;
+      overflow-y: hidden;
+    }
+    
+    #toggle-controls {
+      position: absolute;
+      top: -30px;
+      right: 10px;
+      background: #0066ff;
+      color: white;
+      border: none;
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 201;
+    }
+    
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 8px 0;
+      align-items: center;
+    }
+    
+    .control-item {
+      flex: 1;
+      min-width: 120px;
+    }
+    
+    .control-item label {
+      display: block;
+      font-size: 10px;
+      color: #aaa;
+      margin-bottom: 3px;
+    }
+    
+    .control-item input {
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: #333;
+      -webkit-appearance: none;
+    }
+    
+    .control-item input[type="range"] {
+      -webkit-appearance: none;
+      background: #333;
+    }
+    
+    .control-item input[type="range"]:focus {
+      outline: none;
+    }
+    
+    .control-item input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #0066ff;
+      cursor: pointer;
+    }
+    
+    .control-value {
+      font-size: 10px;
+      color: #0f0;
+      text-align: right;
+      margin-top: 3px;
+    }
+    
+    .control-group-title {
+      font-size: 11px;
+      font-weight: bold;
+      color: #4ecdc4;
+      margin: 8px 0 5px 0;
+      border-left: 2px solid #4ecdc4;
+      padding-left: 8px;
+    }
+    
+    button.small-btn {
+      background: #0066ff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 11px;
+      cursor: pointer;
+      margin: 2px;
+    }
+    
+    button.small-btn.danger {
+      background: #ff4444;
+    }
+    
+    button.small-btn.warning {
+      background: #ffaa44;
+      color: #333;
+    }
+    
+    .status-bar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(10px);
+      border-radius: 8px;
+      padding: 8px 12px;
+      z-index: 200;
+      pointer-events: none;
+      font-size: 11px;
+      color: #0f0;
+      font-family: monospace;
+    }
+    
+    .badge-ar {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.7);
+      padding: 6px 10px;
+      border-radius: 8px;
+      color: #ffaa44;
+      font-family: monospace;
+      font-size: 10px;
+      z-index: 200;
+      pointer-events: none;
+    }
+    
+    @media (orientation: landscape) {
+      #ar-controls {
+        bottom: 10px;
+        left: 10px;
+        right: 10px;
+      }
+      .control-row {
+        gap: 8px;
+      }
+    }
+    
+    /* Scrollbar personnalisée */
+    #ar-controls::-webkit-scrollbar {
+      width: 4px;
+    }
+    
+    #ar-controls::-webkit-scrollbar-track {
+      background: #222;
+    }
+    
+    #ar-controls::-webkit-scrollbar-thumb {
+      background: #0066ff;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ar-container">
+    <!-- Interface AR flottante -->
+    <div class="status-bar" id="status-bar">
+      <span id="status-text">Chargement...</span>
+      <span id="gps-coords" style="float:right;">Lat: --, Lon: --</span>
+    </div>
+    <div class="badge-ar" id="building-count-ar">🏢 Bâtiments: 0</div>
+    
+    <!-- Panneau de contrôle AR -->
+    <div id="ar-controls">
+      <button id="toggle-controls">▼ Masquer</button>
+      
+      <div class="control-group-title">🏢 POSITIONNEMENT DES BÂTIMENTS</div>
+      <div class="control-row">
+        <div class="control-item">
+          <label>📏 Échelle XY</label>
+          <input type="range" id="ar-scaleXY" min="0.3" max="2.5" step="0.01" value="1.0">
+          <div class="control-value" id="ar-scaleXY-val">1.00</div>
+        </div>
+        <div class="control-item">
+          <label>📐 Échelle Y</label>
+          <input type="range" id="ar-scaleY" min="0.2" max="3.0" step="0.01" value="1.0">
+          <div class="control-value" id="ar-scaleY-val">1.00</div>
+        </div>
+      </div>
+      
+      <div class="control-row">
+        <div class="control-item">
+          <label>🔄 Rotation</label>
+          <input type="range" id="ar-rotation" min="-180" max="180" step="1" value="0">
+          <div class="control-value" id="ar-rotation-val">0°</div>
+        </div>
+        <div class="control-item">
+          <label>📌 Décalage X</label>
+          <input type="range" id="ar-offsetX" min="-20" max="20" step="0.5" value="0">
+          <div class="control-value" id="ar-offsetX-val">0.0</div>
+        </div>
+        <div class="control-item">
+          <label>📌 Décalage Z</label>
+          <input type="range" id="ar-offsetZ" min="-20" max="20" step="0.5" value="0">
+          <div class="control-value" id="ar-offsetZ-val">0.0</div>
+        </div>
+      </div>
+      
+      <div class="control-group-title">🎨 APPARENCE</div>
+      <div class="control-row">
+        <div class="control-item">
+          <label>🎨 Opacité</label>
+          <input type="range" id="ar-opacity" min="0.3" max="1.0" step="0.01" value="0.75">
+          <div class="control-value" id="ar-opacity-val">75%</div>
+        </div>
+        <div class="control-item">
+          <label>🔲 Fil de fer</label>
+          <input type="checkbox" id="ar-wireframe" style="width:20px; height:20px; margin-top:5px;">
+        </div>
+      </div>
+      
+      <div class="control-row">
+        <button id="ar-reload" class="small-btn">🔄 Recharger</button>
+        <button id="ar-reset" class="small-btn warning">🔁 Reset</button>
+        <button id="ar-clear" class="small-btn danger">🗑️ Effacer</button>
+      </div>
+      
+      <div class="control-group-title">🧭 NAVIGATION</div>
+      <div class="control-row">
+        <button id="ar-destination" class="small-btn">🎯 Destination</button>
+        <button id="ar-clear-arrows" class="small-btn">🗑️ Effacer flèches</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script>
+let scene, camera, renderer, xrSession = null;
+let currentPosition = { lat: -18.8792, lon: 47.5079 };
+let destination = null;
+let navigationArrows = [];
+let osmMeshes = [];
+
+// Paramètres d'affichage
+let displayParams = {
+  scaleXY: 1.0,
+  scaleY: 1.0,
+  rotation: 0,
+  offsetX: 0,
+  offsetZ: 0,
+  opacity: 0.75,
+  wireframe: false
+};
+
+// ====================== ARBUTTON ======================
+function createARButton() {
+  const button = document.createElement('button');
+  button.textContent = '🎯 ENTRER EN AR';
+  button.style.position = 'absolute';
+  button.style.bottom = '80px';
+  button.style.left = '50%';
+  button.style.transform = 'translateX(-50%)';
+  button.style.padding = '16px 32px';
+  button.style.fontSize = '1.2em';
+  button.style.zIndex = '1000';
+  button.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+  button.style.color = 'white';
+  button.style.border = 'none';
+  button.style.borderRadius = '50px';
+  button.style.cursor = 'pointer';
+  button.style.fontWeight = 'bold';
+  button.style.boxShadow = '0 4px 15px rgba(0,0,0,0.3)';
+
+  button.onclick = async () => {
+    if (!navigator.xr) {
+      alert("WebXR non supporté sur ce navigateur");
+      return;
+    }
+
+    try {
+      xrSession = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['local-floor'],
+        optionalFeatures: ['dom-overlay']
+      });
+      
+      renderer.xr.setSession(xrSession);
+      updateStatus('✅ AR Activée - Ajustez les contrôles en bas');
+      button.style.display = 'none';
+    } catch (err) {
+      console.error(err);
+      alert("Impossible de démarrer AR : " + err.message + "\n\nMode simulation activé");
+    }
+  };
+  
+  document.body.appendChild(button);
+  return button;
+}
+
+// ====================== INIT ======================
+async function init() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 300);
+  
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  // Éclairage
+  const ambientLight = new THREE.AmbientLight(0x404060);
+  scene.add(ambientLight);
+  const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x8888ff, 1.2);
+  scene.add(hemisphereLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(10, 20, 5);
+  dirLight.castShadow = true;
+  scene.add(dirLight);
+
+  createARButton();
+  setupARControls();
+  getCurrentPosition();
+  
+  // Chargement automatique
+  setTimeout(() => loadOSMBuildings(), 2000);
+
+  renderer.setAnimationLoop(animate);
+}
+
+function animate() {
+  renderer.render(scene, camera);
+}
+
+// ====================== GPS ======================
+let lastPosition = null;
+
+function getCurrentPosition() {
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(pos => {
+      currentPosition = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      document.getElementById('gps-coords').innerHTML = `${currentPosition.lat.toFixed(5)}°, ${currentPosition.lon.toFixed(5)}°`;
+      
+      if (lastPosition && distance(lastPosition, currentPosition) > 30) {
+        loadOSMBuildings();
+      }
+      lastPosition = currentPosition;
+    }, null, { enableHighAccuracy: true });
+  }
+}
+
+function distance(pos1, pos2) {
+  const R = 6371000;
+  const dLat = (pos2.lat - pos1.lat) * Math.PI / 180;
+  const dLon = (pos2.lon - pos1.lon) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(pos1.lat * Math.PI/180) * Math.cos(pos2.lat * Math.PI/180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ====================== OSM BÂTIMENTS ======================
+async function loadOSMBuildings() {
+  updateStatus("Chargement OSM...");
+  
+  const radius = 0.003;
+  const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
+  
+  try {
+    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    osmMeshes.forEach(m => scene.remove(m));
+    osmMeshes = [];
+
+    data.elements.forEach(building => {
+      if (!building.geometry || building.geometry.length < 3) return;
+      
+      const points = building.geometry.map(p => projectLatLon(p.lat, p.lon));
+      const validPoints = points.filter(p => !isNaN(p.x) && !isNaN(p.y));
+      if (validPoints.length < 3) return;
+
+      try {
+        const shape = new THREE.Shape(validPoints);
+        let height = building.tags?.height ? parseFloat(building.tags.height) : 8;
+        height = Math.min(Math.max(height, 3), 30);
+        
+        let color = 0x4488ff;
+        const type = building.tags?.building;
+        const colors = { 'commercial': 0xffaa66, 'residential': 0x66aa88, 'industrial': 0xaa8866 };
+        if (type && colors[type]) color = colors[type];
+        
+        const extrude = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+        extrude.computeBoundingBox();
+        const center = extrude.boundingBox.getCenter(new THREE.Vector3());
+        extrude.translate(-center.x, 0, -center.z);
+        
+        const material = new THREE.MeshPhongMaterial({ color, transparent: true, opacity: displayParams.opacity });
+        const mesh = new THREE.Mesh(extrude, material);
+        
+        mesh.userData = { originalPos: new THREE.Vector3(center.x, 0, center.z), originalHeight: height };
+        mesh.position.copy(mesh.userData.originalPos);
+        mesh.castShadow = true;
+        
+        scene.add(mesh);
+        osmMeshes.push(mesh);
+      } catch(e) { console.warn(e); }
+    });
+
+    applyAllAdjustments();
+    document.getElementById('building-count-ar').innerHTML = `🏢 ${osmMeshes.length} bâtiments`;
+    updateStatus(`✅ ${osmMeshes.length} bâtiments chargés`);
+  } catch (e) {
+    updateStatus("❌ Erreur OSM");
+  }
+}
+
+function projectLatLon(lat, lon) {
+  const scale = 111300;
+  const x = (lon - currentPosition.lon) * scale * Math.cos(currentPosition.lat * Math.PI / 180);
+  const z = (currentPosition.lat - lat) * scale;
+  return new THREE.Vector2(x, z);
+}
+
+// ====================== APPLIQUER AJUSTEMENTS ======================
+function applyAllAdjustments() {
+  osmMeshes.forEach(mesh => {
+    const orig = mesh.userData.originalPos;
+    if (!orig) return;
+    
+    mesh.scale.set(displayParams.scaleXY, displayParams.scaleY, displayParams.scaleXY);
+    mesh.rotation.y = displayParams.rotation * Math.PI / 180;
+    mesh.position.x = orig.x * displayParams.scaleXY + displayParams.offsetX;
+    mesh.position.z = orig.z * displayParams.scaleXY + displayParams.offsetZ;
+    
+    if (mesh.material) {
+      mesh.material.opacity = displayParams.opacity;
+      mesh.material.wireframe = displayParams.wireframe;
+    }
+  });
+}
+
+// ====================== CONTRÔLES AR ======================
+function setupARControls() {
+  // Échelle XY
+  const scaleXY = document.getElementById('ar-scaleXY');
+  scaleXY.oninput = (e) => {
+    displayParams.scaleXY = parseFloat(e.target.value);
+    document.getElementById('ar-scaleXY-val').innerHTML = displayParams.scaleXY.toFixed(2);
+    applyAllAdjustments();
+  };
+  
+  // Échelle Y
+  const scaleY = document.getElementById('ar-scaleY');
+  scaleY.oninput = (e) => {
+    displayParams.scaleY = parseFloat(e.target.value);
+    document.getElementById('ar-scaleY-val').innerHTML = displayParams.scaleY.toFixed(2);
+    applyAllAdjustments();
+  };
+  
+  // Rotation
+  const rotation = document.getElementById('ar-rotation');
+  rotation.oninput = (e) => {
+    displayParams.rotation = parseFloat(e.target.value);
+    document.getElementById('ar-rotation-val').innerHTML = displayParams.rotation + '°';
+    applyAllAdjustments();
+  };
+  
+  // Décalage X
+  const offsetX = document.getElementById('ar-offsetX');
+  offsetX.oninput = (e) => {
+    displayParams.offsetX = parseFloat(e.target.value);
+    document.getElementById('ar-offsetX-val').innerHTML = displayParams.offsetX.toFixed(1);
+    applyAllAdjustments();
+  };
+  
+  // Décalage Z
+  const offsetZ = document.getElementById('ar-offsetZ');
+  offsetZ.oninput = (e) => {
+    displayParams.offsetZ = parseFloat(e.target.value);
+    document.getElementById('ar-offsetZ-val').innerHTML = displayParams.offsetZ.toFixed(1);
+    applyAllAdjustments();
+  };
+  
+  // Opacité
+  const opacity = document.getElementById('ar-opacity');
+  opacity.oninput = (e) => {
+    displayParams.opacity = parseFloat(e.target.value);
+    document.getElementById('ar-opacity-val').innerHTML = Math.round(displayParams.opacity * 100) + '%';
+    applyAllAdjustments();
+  };
+  
+  // Wireframe
+  const wireframe = document.getElementById('ar-wireframe');
+  wireframe.onchange = (e) => {
+    displayParams.wireframe = e.target.checked;
+    applyAllAdjustments();
+  };
+  
+  // Recharger
+  document.getElementById('ar-reload').onclick = () => loadOSMBuildings();
+  
+  // Reset
+  document.getElementById('ar-reset').onclick = () => {
+    displayParams = { scaleXY: 1.0, scaleY: 1.0, rotation: 0, offsetX: 0, offsetZ: 0, opacity: 0.75, wireframe: false };
+    scaleXY.value = 1; scaleY.value = 1; rotation.value = 0; offsetX.value = 0; offsetZ.value = 0; opacity.value = 0.75; wireframe.checked = false;
+    document.getElementById('ar-scaleXY-val').innerHTML = '1.00';
+    document.getElementById('ar-scaleY-val').innerHTML = '1.00';
+    document.getElementById('ar-rotation-val').innerHTML = '0°';
+    document.getElementById('ar-offsetX-val').innerHTML = '0.0';
+    document.getElementById('ar-offsetZ-val').innerHTML = '0.0';
+    document.getElementById('ar-opacity-val').innerHTML = '75%';
+    applyAllAdjustments();
+    updateStatus('Contrôles réinitialisés');
+  };
+  
+  // Effacer tout
+  document.getElementById('ar-clear').onclick = () => {
+    osmMeshes.forEach(m => scene.remove(m));
+    osmMeshes = [];
+    navigationArrows.forEach(a => scene.remove(a));
+    navigationArrows = [];
+    document.getElementById('building-count-ar').innerHTML = '🏢 0 bâtiments';
+    updateStatus('Tout effacé');
+  };
+  
+  // Destination
+  document.getElementById('ar-destination').onclick = () => {
+    const lat = parseFloat(prompt("Latitude:", currentPosition.lat + 0.002));
+    const lon = parseFloat(prompt("Longitude:", currentPosition.lon + 0.002));
+    if (lat && lon) {
+      destination = { lat, lon };
+      updateNavigation();
+    }
+  };
+  
+  // Effacer flèches
+  document.getElementById('ar-clear-arrows').onclick = () => {
+    navigationArrows.forEach(a => scene.remove(a));
+    navigationArrows = [];
+    updateStatus('Flèches effacées');
+  };
+  
+  // Toggle panneau
+  const toggleBtn = document.getElementById('toggle-controls');
+  const panel = document.getElementById('ar-controls');
+  let collapsed = false;
+  toggleBtn.onclick = () => {
+    collapsed = !collapsed;
+    if (collapsed) {
+      panel.classList.add('collapsed');
+      toggleBtn.innerHTML = '▲ Afficher';
+    } else {
+      panel.classList.remove('collapsed');
+      toggleBtn.innerHTML = '▼ Masquer';
+    }
+  };
+}
+
+// ====================== FLÈCHES ======================
+function createArrow() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 16), new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  body.rotation.x = Math.PI / 2;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.4, 16), new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  head.rotation.x = Math.PI / 2;
+  head.position.z = 2.3;
+  group.add(head);
+  return group;
+}
+
+function updateNavigation() {
+  if (!destination) return;
+  const bearing = calculateBearing(currentPosition.lat, currentPosition.lon, destination.lat, destination.lon);
+  const angle = bearing * Math.PI / 180;
+  
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+  
+  for (let i = 1; i <= 5; i++) {
+    const arrow = createArrow();
+    arrow.rotation.y = angle;
+    arrow.position.set(Math.sin(angle) * 2, 0.3, -i * 5);
+    scene.add(arrow);
+    navigationArrows.push(arrow);
+  }
+  updateStatus(`→ Direction ${bearing.toFixed(0)}°`);
+}
+
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const λ1 = lon1 * Math.PI / 180, λ2 = lon2 * Math.PI / 180;
+  const y = Math.sin(λ2-λ1) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
+  let brng = Math.atan2(y, x) * 180 / Math.PI;
+  return (brng + 360) % 360;
+}
+
+function updateStatus(text) {
+  document.getElementById('status-text').innerHTML = text;
+}
+
+window.onload = init;
+  </script>
+</body>
+</html>
