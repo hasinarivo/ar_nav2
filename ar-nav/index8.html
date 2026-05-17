@@ -112,7 +112,7 @@
       </div>
     </div>
     
-    <!--<div class="control-group">
+    <div class="control-group">
       <h3>🎨 Apparence</h3>
       <label>🎨 Opacité <span id="opacity-val" class="value">75%</span></label>
       <input type="range" id="opacity" min="0.3" max="1.0" step="0.01" value="0.75">
@@ -122,7 +122,7 @@
       
       <label>📐 Hauteur max (m) <span id="maxHeight-val" class="value">30</span></label>
       <input type="range" id="maxHeight" min="10" max="50" step="1" value="30">
-    </div>-->
+    </div>
     
     <button id="reload-buildings">🔄 Recharger Bâtiments</button>
     <button id="reset-controls">🔁 Réinitialiser Contrôles</button>
@@ -269,7 +269,7 @@ function distance(pos1, pos2) {
 async function loadOSMBuildings() {
   updateStatus("Chargement bâtiments OSM...");
   
-  const radius = 0.001; // ~110m
+  const radius = 0.003;
   const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
   
   try {
