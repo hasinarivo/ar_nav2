@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav OSM - Navigation Piétonne</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; }
+    #ui {
+      position: absolute; top: 10px; left: 10px; color: white; 
+      background: rgba(0,0,0,0.85); padding: 15px; border-radius: 12px; 
+      z-index: 100; pointer-events: auto; max-width: 320px;
+    }
+    button { 
+      display: block; width: 100%; padding: 14px; margin: 8px 0; 
+      font-size: 1.1em; background: #0066ff; color: white; border: none; border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: scale(1.02);
+    }
+    #status { margin-top: 10px; font-weight: bold; color: #0f0; font-size: 0.9em; }
+    .badge {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.7);
+      padding: 5px 10px;
+      border-radius: 8px;
+      color: #ffaa44;
+      font-family: monospace;
+      font-size: 11px;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h2>🚀 AR Navigation</h2>
+    <div id="status">Chargement...</div>
+  </div>
+  <div class="badge" id="building-count">🏢 Bâtiments: 0</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script>
+let scene, camera, renderer, xrSession = null;
+let currentPosition = { lat: -18.8792, lon: 47.5079 }; // Antananarivo
+let destination = null;
+let navigationArrows = [];
+let osmMeshes = [];
+
+// ====================== CONFIGURATION ======================
+// 1. Ajuster la zone selon le contexte
+const searchRadius = 0.001;  // ~110m (valeur par défaut)
+// Options: 0.002 = ~220m, 0.003 = ~330m, 0.005 = ~550m
+
+// ====================== ARButton + Session ======================
+function createARButton(renderer) {
+  const button = document.createElement('button');
+  button.textContent = 'ENTRER EN AR';
+  button.style.position = 'absolute';
+  button.style.bottom = '40px';
+  button.style.left = '50%';
+  button.style.transform = 'translateX(-50%)';
+  button.style.padding = '18px 40px';
+  button.style.fontSize = '1.4em';
+  button.style.zIndex = '1000';
+  button.style.background = '#0066ff';
+  button.style.color = 'white';
+  button.style.border = 'none';
+  button.style.borderRadius = '8px';
+  button.style.cursor = 'pointer';
+
+  button.onclick = async () => {
+    if (!navigator.xr) return alert("WebXR non supporté");
+
+    try {
+      xrSession = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['local-floor', 'hit-test'],
+        optionalFeatures: ['dom-overlay']
+      });
+
+      renderer.xr.setSession(xrSession);
+      updateStatus('✅ AR Activée !');
+      button.style.display = 'none';
+    } catch (err) {
+      console.error(err);
+      alert("Impossible de démarrer AR : " + err.message);
+    }
+  };
+
+  document.body.appendChild(button);
+  return button;
+}
+
+// ====================== INIT ======================
+async function init() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 300);
+  
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8888ff, 1.2));
+  
+  // Ajout d'une lumière directionnelle pour mieux voir les bâtiments
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(10, 20, 5);
+  scene.add(dirLight);
+
+  createARButton(renderer);
+  setupUI();
+  getCurrentPosition();
+  addRadiusControl(); // Ajouter le contrôle du rayon
+
+  renderer.setAnimationLoop(animate);
+}
+
+function animate() {
+  renderer.render(scene, camera);
+}
+
+// ====================== GPS ======================
+let lastPosition = null;
+
+function getCurrentPosition() {
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(pos => {
+      const newPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      currentPosition = newPos;
+      
+      // Recharger automatiquement si déplacement > 50m
+      if (lastPosition && distance(lastPosition, newPos) > 50) {
+        loadOSMBuildings();  // Recharge les bâtiments
+      }
+      lastPosition = newPos;
+    }, null, { enableHighAccuracy: true });
+  }
+}
+
+// Calcul de distance entre 2 points GPS
+function distance(pos1, pos2) {
+  const R = 6371000; // Rayon terre en mètres
+  const dLat = (pos2.lat - pos1.lat) * Math.PI / 180;
+  const dLon = (pos2.lon - pos1.lon) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(pos1.lat * Math.PI/180) * Math.cos(pos2.lat * Math.PI/180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ====================== FLÈCHES ======================
+function createArrow() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  body.rotation.x = Math.PI / 2;
+  group.add(body);
+
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.4, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  head.rotation.x = Math.PI / 2;
+  head.position.z = 2.3;
+  group.add(head);
+  return group;
+}
+
+function updateNavigation() {
+  if (!destination) return;
+  const bearing = calculateBearing(currentPosition.lat, currentPosition.lon, destination.lat, destination.lon);
+  const angle = bearing * Math.PI / 180;
+
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+
+  for (let i = 1; i <= 6; i++) {
+    const arrow = createArrow();
+    arrow.rotation.y = angle;
+    arrow.position.set(Math.sin(angle) * 2, 0.3, -i * 6);
+    scene.add(arrow);
+    navigationArrows.push(arrow);
+  }
+  updateStatus(`→ Direction ${bearing.toFixed(0)}°`);
+}
+
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const λ1 = lon1 * Math.PI / 180, λ2 = lon2 * Math.PI / 180;
+  const y = Math.sin(λ2-λ1) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
+  let brng = Math.atan2(y, x) * 180 / Math.PI;
+  return (brng + 360) % 360;
+}
+
+// ====================== OSM BÂTIMENTS AVEC FILTRES ======================
+async function loadOSMBuildings() {
+  updateStatus(`Chargement bâtiments OSM (rayon: ${(searchRadius * 111).toFixed(0)}m)...`);
+  
+  const query = `[out:json];way["building"](${currentPosition.lat-searchRadius},${currentPosition.lon-searchRadius},${currentPosition.lat+searchRadius},${currentPosition.lon+searchRadius});out geom;`;
+  
+  try {
+    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    // Supprimer anciens bâtiments
+    osmMeshes.forEach(m => scene.remove(m));
+    osmMeshes = [];
+
+    // 3. Filtre optionnel par type de bâtiment
+    const relevantBuildings = data.elements.filter(building => {
+      const type = building.tags?.building;
+      // Types de bâtiments à afficher
+      const allowedTypes = ['yes', 'commercial', 'residential', 'public', 
+                           'industrial', 'school', 'hospital', 'apartments',
+                           'house', 'garage', 'retail', 'office', 'hotel'];
+      return type && allowedTypes.includes(type);
+    });
+
+    // Si aucun bâtiment filtré, on prend tous les bâtiments
+    const buildingsToShow = relevantBuildings.length > 0 ? relevantBuildings : data.elements;
+
+    buildingsToShow.forEach(building => {
+      if (!building.geometry || building.geometry.length < 3) return;
+      
+      const points = building.geometry.map(p => projectLatLon(p.lat, p.lon));
+      
+      // Filtrer les points invalides
+      const validPoints = points.filter(p => !isNaN(p.x) && !isNaN(p.y));
+      if (validPoints.length < 3) return;
+
+      try {
+        const shape = new THREE.Shape(validPoints);
+        
+        // Hauteur du bâtiment (si disponible)
+        let height = 8; // hauteur par défaut
+        if (building.tags && building.tags.height) {
+          height = parseFloat(building.tags.height) * 0.5;
+          height = Math.min(height, 30); // Limiter à 30 unités max
+        }
+        
+        // Couleur selon le type de bâtiment
+        let color = 0x4488ff; // couleur par défaut
+        const buildingType = building.tags?.building;
+        const buildingColors = {
+          'commercial': 0xffaa66,
+          'residential': 0x66aa88,
+          'industrial': 0xaa8866,
+          'public': 0x88ffaa,
+          'school': 0xffaa88,
+          'hospital': 0xff8888,
+          'hotel': 0x88aaff
+        };
+        if (buildingType && buildingColors[buildingType]) {
+          color = buildingColors[buildingType];
+        }
+        
+        const extrude = new THREE.ExtrudeGeometry(shape, { 
+          depth: height, 
+          bevelEnabled: false 
+        });
+        
+        const material = new THREE.MeshPhongMaterial({ 
+          color: color, 
+          transparent: true, 
+          opacity: 0.75 
+        });
+        
+        const mesh = new THREE.Mesh(extrude, material);
+        mesh.position.y = 0;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        osmMeshes.push(mesh);
+      } catch(e) {
+        console.warn('Erreur création bâtiment:', e);
+      }
+    });
+
+    // 2. Mise à jour de l'indicateur visuel avec le compteur
+    updateBuildingCount(osmMeshes.length, buildingsToShow.length, data.elements.length);
+    updateStatus(`✅ ${osmMeshes.length} bâtiments affichés (${data.elements.length} trouvés, ${buildingsToShow.length} filtrés)`);
+    
+  } catch (e) {
+    console.error('Erreur OSM:', e);
+    updateStatus(`❌ Erreur OSM: ${e.message || 'API Overpass'}`);
+  }
+}
+
+function projectLatLon(lat, lon) {
+  const scale = 111300;
+  const x = (lon - currentPosition.lon) * scale * Math.cos(currentPosition.lat * Math.PI / 180);
+  const z = (currentPosition.lat - lat) * scale;
+  return new THREE.Vector2(x, z);
+}
+
+// Mise à jour du compteur visuel
+function updateBuildingCount(displayed, filtered, total) {
+  const badge = document.getElementById('building-count');
+  if (badge) {
+    badge.innerHTML = `🏢 Bâtiments: ${displayed} | 📊 Filtre: ${filtered}/${total}`;
+    badge.style.color = displayed > 0 ? '#0f0' : '#ffaa44';
+  }
+}
+
+// ====================== CONTROLE DU RAYON ======================
+function addRadiusControl() {
+  const ui = document.getElementById('ui');
+  
+  const radiusContainer = document.createElement('div');
+  radiusContainer.style.marginTop = '10px';
+  radiusContainer.style.padding = '8px';
+  radiusContainer.style.background = 'rgba(0,0,0,0.5)';
+  radiusContainer.style.borderRadius = '8px';
+  
+  const radiusLabel = document.createElement('label');
+  radiusLabel.textContent = `📏 Rayon: ${(searchRadius * 111).toFixed(0)}m`;
+  radiusLabel.style.display = 'block';
+  radiusLabel.style.marginBottom = '5px';
+  radiusLabel.style.fontSize = '0.85em';
+  
+  const radiusSlider = document.createElement('input');
+  radiusSlider.type = 'range';
+  radiusSlider.min = '0.001';
+  radiusSlider.max = '0.008';
+  radiusSlider.step = '0.0005';
+  radiusSlider.value = searchRadius;
+  radiusSlider.style.width = '100%';
+  
+  radiusSlider.oninput = (e) => {
+    const newRadius = parseFloat(e.target.value);
+    window.searchRadius = newRadius; // Mettre à jour global
+    radiusLabel.textContent = `📏 Rayon: ${(newRadius * 111).toFixed(0)}m`;
+    loadOSMBuildings(); // Recharger avec le nouveau rayon
+  };
+  
+  radiusContainer.appendChild(radiusLabel);
+  radiusContainer.appendChild(radiusSlider);
+  ui.appendChild(radiusContainer);
+}
+
+// ====================== UI ======================
+function setupUI() {
+  const ui = document.getElementById('ui');
+
+  const buttons = [
+    { text: '🏢 Charger Bâtiments', fn: loadOSMBuildings },
+    { text: '🎯 Définir Destination', fn: setDestination },
+    { text: '🗑️ Effacer Flèches', fn: clearArrows },
+    { text: '🗑️ Effacer Bâtiments', fn: clearBuildings }
+  ];
+
+  buttons.forEach(b => {
+    const btn = document.createElement('button');
+    btn.textContent = b.text;
+    btn.onclick = b.fn;
+    ui.appendChild(btn);
+  });
+}
+
+function setDestination() {
+  const lat = parseFloat(prompt("Latitude destination :", currentPosition.lat + 0.002));
+  const lon = parseFloat(prompt("Longitude destination :", currentPosition.lon + 0.002));
+  if (lat && lon) {
+    destination = { lat, lon };
+    updateNavigation();
+  }
+}
+
+function clearArrows() {
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+  updateStatus('Flèches effacées');
+}
+
+function clearBuildings() {
+  osmMeshes.forEach(m => scene.remove(m));
+  osmMeshes = [];
+  updateBuildingCount(0, 0, 0);
+  updateStatus('Bâtiments effacés');
+}
+
+// ====================== UTILS ======================
+// 2. Fonction updateStatus améliorée avec compteur
+function updateStatus(text) {
+  const statusDiv = document.getElementById('status');
+  const count = osmMeshes.length;
+  statusDiv.innerHTML = `${text} ${count > 0 ? `(${count} bâtiments visibles)` : ''}`;
+}
+
+window.onload = init;
+
+  </script>
+</body>
+</html>
