@@ -424,12 +424,21 @@ async function loadOSMBuildings() {
         
         const material = new THREE.MeshPhongMaterial({ color, transparent: true, opacity: displayParams.opacity });
         const mesh = new THREE.Mesh(extrude, material);
-        
-        mesh.userData = { 
-          originalPos: new THREE.Vector3(center.x, 0, center.z), 
-          originalHeight: height 
+
+        // Faire pivoter l'extrusion pour que la hauteur soit sur Y
+        mesh.rotation.x = -Math.PI / 2;
+
+        mesh.userData = {
+        originalPos: new THREE.Vector3(center.x, 0, center.z),
+        originalHeight: height
         };
-        mesh.position.copy(mesh.userData.originalPos);
+
+        mesh.position.set(
+        mesh.userData.originalPos.x,
+        0,
+        mesh.userData.originalPos.z
+        );
+
         mesh.castShadow = true;
         
         buildingsGroup.add(mesh);
@@ -461,7 +470,11 @@ function applyBuildingAdjustments() {
     mesh.scale.set(displayParams.scaleXY, displayParams.scaleY, displayParams.scaleXY);
     
     // Rotation du bâtiment
-    mesh.rotation.y = displayParams.rotation * Math.PI / 180;
+    mesh.rotation.set(
+        -Math.PI / 2,
+        displayParams.rotation * Math.PI / 180,
+        0
+        );
     
     // Position avec décalages
     mesh.position.x = orig.x * displayParams.scaleXY + displayParams.offsetX;
@@ -557,7 +570,7 @@ function setupARControls() {
     displayParams = {
       scaleXY: 1.0, scaleY: 1.0, rotation: 0,
       offsetX: 0, offsetZ: 0, opacity: 0.75,
-      wireframe: false, groundTilt: -90, tiltBuildings: true
+      wireframe: false, groundTilt: 0, tiltBuildings: true
     };
     scaleXY.value = 1; scaleY.value = 1; rotation.value = 0;
     offsetX.value = 0; offsetZ.value = 0; opacity.value = 0.75;
@@ -568,7 +581,7 @@ function setupARControls() {
     document.getElementById('ar-offsetX-val').innerHTML = '0.0';
     document.getElementById('ar-offsetZ-val').innerHTML = '0.0';
     document.getElementById('ar-opacity-val').innerHTML = '75%';
-    document.getElementById('ar-ground-tilt-val').innerHTML = '-90°';
+    document.getElementById('ar-ground-tilt-val').innerHTML = '0°';
     applyGroundTilt();
     applyBuildingAdjustments();
     updateStatus('Contrôles réinitialisés - Sol incliné à 90° vers la droite');
