@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Nav OSM - Contrôles Avancés</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; }
+    #ui {
+      position: absolute; top: 10px; left: 10px; color: white; 
+      background: rgba(0,0,0,0.9);
+      backdrop-filter: blur(10px);
+      padding: 15px; 
+      border-radius: 12px; 
+      z-index: 100; 
+      pointer-events: auto; 
+      max-width: 350px;
+      max-height: 90vh;
+      overflow-y: auto;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    button { 
+      display: block; width: 100%; padding: 12px; margin: 8px 0; 
+      font-size: 1em; background: #0066ff; color: white; border: none; border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover { transform: scale(1.02); }
+    #status { margin-top: 10px; font-weight: bold; color: #0f0; font-size: 0.85em; }
+    .badge {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.8);
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: #ffaa44;
+      font-family: monospace;
+      font-size: 11px;
+      z-index: 100;
+    }
+    .control-group {
+      margin-top: 10px;
+      padding: 10px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 8px;
+      border-left: 3px solid #0066ff;
+    }
+    .control-group label {
+      display: block;
+      font-size: 0.8em;
+      margin-bottom: 5px;
+      color: #ccc;
+    }
+    .control-group input {
+      width: 100%;
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+    .control-group .value {
+      float: right;
+      color: #0f0;
+    }
+    h3 {
+      font-size: 0.9em;
+      margin: 10px 0 5px 0;
+      color: #4ecdc4;
+    }
+    hr {
+      border-color: rgba(255,255,255,0.2);
+      margin: 10px 0;
+    }
+    .checkbox-group {
+      margin: 10px 0;
+    }
+    .checkbox-group label {
+      display: inline-block;
+      margin-left: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h2>🚀 AR Navigation <span style="font-size:12px;">v2.0</span></h2>
+    <div id="status">Chargement...</div>
+    
+    <div class="control-group">
+      <h3>📍 Position GPS</h3>
+      <div id="gps-coords" style="font-size:11px; font-family:monospace;">Lat: --, Lon: --</div>
+    </div>
+    
+    <div class="control-group">
+      <h3>🏢 Contrôles des Bâtiments</h3>
+      <label>📏 Échelle XY <span id="scaleXY-val" class="value">1.00</span></label>
+      <input type="range" id="scaleXY" min="0.3" max="2.5" step="0.01" value="1.0">
+      
+      <label>📐 Échelle Y (Hauteur) <span id="scaleY-val" class="value">1.00</span></label>
+      <input type="range" id="scaleY" min="0.2" max="3.0" step="0.01" value="1.0">
+      
+      <label>🔄 Rotation (degrés) <span id="rotation-val" class="value">0°</span></label>
+      <input type="range" id="rotation" min="-180" max="180" step="1" value="0">
+      
+      <label>📌 Décalage X (m) <span id="offsetX-val" class="value">0.0</span></label>
+      <input type="range" id="offsetX" min="-20" max="20" step="0.5" value="0">
+      
+      <label>📌 Décalage Z (m) <span id="offsetZ-val" class="value">0.0</span></label>
+      <input type="range" id="offsetZ" min="-20" max="20" step="0.5" value="0">
+      
+      <div class="checkbox-group">
+        <input type="checkbox" id="showWireframe"> 
+        <label>🔲 Mode Fil de fer</label>
+      </div>
+    </div>
+    
+    <div class="control-group">
+      <h3>🎨 Apparence</h3>
+      <label>🎨 Opacité <span id="opacity-val" class="value">75%</span></label>
+      <input type="range" id="opacity" min="0.3" max="1.0" step="0.01" value="0.75">
+      
+      <label>✨ Hauteur min (m) <span id="minHeight-val" class="value">5</span></label>
+      <input type="range" id="minHeight" min="2" max="15" step="1" value="5">
+      
+      <label>📐 Hauteur max (m) <span id="maxHeight-val" class="value">30</span></label>
+      <input type="range" id="maxHeight" min="10" max="50" step="1" value="30">
+    </div>
+    
+    <button id="reload-buildings">🔄 Recharger Bâtiments</button>
+    <button id="reset-controls">🔁 Réinitialiser Contrôles</button>
+    <button id="clear-all">🗑️ Tout Effacer</button>
+  </div>
+  <div class="badge" id="building-count">🏢 Bâtiments: 0</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script>
+let scene, camera, renderer, xrSession = null;
+let currentPosition = { lat: -18.8792, lon: 47.5079 };
+let destination = null;
+let navigationArrows = [];
+let osmMeshes = [];        // Stockage des meshes originaux
+let originalPositions = []; // Positions originales des bâtiments
+
+// Paramètres d'affichage
+let displayParams = {
+  scaleXY: 1.0,
+  scaleY: 1.0,
+  rotation: 0,
+  offsetX: 0,
+  offsetZ: 0,
+  opacity: 0.75,
+  minHeight: 5,
+  maxHeight: 30,
+  wireframe: false
+};
+
+// ====================== ARButton + Session ======================
+function createARButton(renderer) {
+  const button = document.createElement('button');
+  button.textContent = 'ENTRER EN AR';
+  button.style.position = 'absolute';
+  button.style.bottom = '40px';
+  button.style.left = '50%';
+  button.style.transform = 'translateX(-50%)';
+  button.style.padding = '18px 40px';
+  button.style.fontSize = '1.4em';
+  button.style.zIndex = '1000';
+  button.style.background = '#0066ff';
+  button.style.color = 'white';
+  button.style.border = 'none';
+  button.style.borderRadius = '50px';
+  button.style.cursor = 'pointer';
+  button.style.fontWeight = 'bold';
+
+  button.onclick = async () => {
+    if (!navigator.xr) return alert("WebXR non supporté");
+
+    try {
+      xrSession = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['local-floor', 'hit-test'],
+        optionalFeatures: ['dom-overlay']
+      });
+
+      renderer.xr.setSession(xrSession);
+      updateStatus('✅ AR Activée !');
+      button.style.display = 'none';
+    } catch (err) {
+      console.error(err);
+      alert("Impossible de démarrer AR : " + err.message);
+    }
+  };
+
+  document.body.appendChild(button);
+  return button;
+}
+
+// ====================== INIT ======================
+async function init() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 300);
+  
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  // Éclairage amélioré
+  const ambientLight = new THREE.AmbientLight(0x404060);
+  scene.add(ambientLight);
+  
+  const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x8888ff, 1.2);
+  scene.add(hemisphereLight);
+  
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(10, 20, 5);
+  dirLight.castShadow = true;
+  scene.add(dirLight);
+  
+  const fillLight = new THREE.PointLight(0x4466cc, 0.3);
+  fillLight.position.set(-5, 10, -5);
+  scene.add(fillLight);
+
+  createARButton(renderer);
+  setupUI();
+  setupControls();
+  getCurrentPosition();
+  
+  // Chargement automatique au démarrage
+  setTimeout(() => loadOSMBuildings(), 2000);
+
+  renderer.setAnimationLoop(animate);
+}
+
+function animate() {
+  renderer.render(scene, camera);
+}
+
+// ====================== GPS ======================
+let lastPosition = null;
+
+function getCurrentPosition() {
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(pos => {
+      const newPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      currentPosition = newPos;
+      
+      // Mise à jour affichage GPS
+      document.getElementById('gps-coords').innerHTML = 
+        `Lat: ${currentPosition.lat.toFixed(6)}, Lon: ${currentPosition.lon.toFixed(6)}`;
+      
+      if (lastPosition && distance(lastPosition, newPos) > 30) {
+        loadOSMBuildings();
+      }
+      lastPosition = newPos;
+    }, null, { enableHighAccuracy: true });
+  }
+}
+
+function distance(pos1, pos2) {
+  const R = 6371000;
+  const dLat = (pos2.lat - pos1.lat) * Math.PI / 180;
+  const dLon = (pos2.lon - pos1.lon) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(pos1.lat * Math.PI/180) * Math.cos(pos2.lat * Math.PI/180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ====================== OSM BÂTIMENTS ======================
+async function loadOSMBuildings() {
+  updateStatus("Chargement bâtiments OSM...");
+  
+  const radius = 0.003;
+  const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
+  
+  try {
+    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    // Supprimer anciens bâtiments
+    osmMeshes.forEach(m => scene.remove(m));
+    osmMeshes = [];
+    originalPositions = [];
+
+    data.elements.forEach(building => {
+      if (!building.geometry || building.geometry.length < 3) return;
+      
+      const points = building.geometry.map(p => projectLatLon(p.lat, p.lon));
+      const validPoints = points.filter(p => !isNaN(p.x) && !isNaN(p.y));
+      if (validPoints.length < 3) return;
+
+      try {
+        const shape = new THREE.Shape(validPoints);
+        
+        // Calcul de la hauteur
+        let height = 8;
+        if (building.tags && building.tags.height) {
+          height = parseFloat(building.tags.height);
+          height = Math.min(Math.max(height, displayParams.minHeight), displayParams.maxHeight);
+        }
+        
+        // Couleur selon type
+        let color = 0x4488ff;
+        const buildingType = building.tags?.building;
+        const buildingColors = {
+          'commercial': 0xffaa66, 'residential': 0x66aa88,
+          'industrial': 0xaa8866, 'public': 0x88ffaa,
+          'school': 0xffaa88, 'hospital': 0xff8888, 'hotel': 0x88aaff
+        };
+        if (buildingType && buildingColors[buildingType]) color = buildingColors[buildingType];
+        
+        const extrude = new THREE.ExtrudeGeometry(shape, { 
+          depth: height, 
+          bevelEnabled: false 
+        });
+        
+        // Centrer la géométrie
+        extrude.computeBoundingBox();
+        const center = extrude.boundingBox.getCenter(new THREE.Vector3());
+        extrude.translate(-center.x, 0, -center.z);
+        
+        const material = new THREE.MeshPhongMaterial({ 
+          color: color, 
+          transparent: true, 
+          opacity: displayParams.opacity,
+          side: THREE.DoubleSide
+        });
+        
+        const mesh = new THREE.Mesh(extrude, material);
+        
+        // Sauvegarder la position originale
+        const originalPos = new THREE.Vector3(center.x, 0, center.z);
+        originalPositions.push(originalPos);
+        
+        mesh.userData = {
+          originalPos: originalPos.clone(),
+          originalHeight: height,
+          type: buildingType || 'default'
+        };
+        
+        mesh.position.copy(originalPos);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        
+        scene.add(mesh);
+        osmMeshes.push(mesh);
+      } catch(e) {
+        console.warn('Erreur création:', e);
+      }
+    });
+
+    applyAllAdjustments();
+    updateBuildingCount(osmMeshes.length);
+    updateStatus(`✅ ${osmMeshes.length} bâtiments chargés`);
+    
+  } catch (e) {
+    console.error('Erreur OSM:', e);
+    updateStatus(`❌ Erreur OSM`);
+  }
+}
+
+function projectLatLon(lat, lon) {
+  const scale = 111300;
+  const x = (lon - currentPosition.lon) * scale * Math.cos(currentPosition.lat * Math.PI / 180);
+  const z = (currentPosition.lat - lat) * scale;
+  return new THREE.Vector2(x, z);
+}
+
+// ====================== APPLIQUER TOUS LES AJUSTEMENTS ======================
+function applyAllAdjustments() {
+  osmMeshes.forEach((mesh, idx) => {
+    const originalPos = mesh.userData.originalPos;
+    if (!originalPos) return;
+    
+    // Appliquer échelle
+    mesh.scale.set(displayParams.scaleXY, displayParams.scaleY, displayParams.scaleXY);
+    
+    // Appliquer rotation
+    mesh.rotation.y = displayParams.rotation * Math.PI / 180;
+    
+    // Appliquer décalages
+    mesh.position.x = originalPos.x * displayParams.scaleXY + displayParams.offsetX;
+    mesh.position.z = originalPos.z * displayParams.scaleXY + displayParams.offsetZ;
+    mesh.position.y = 0;
+    
+    // Appliquer opacité
+    if (mesh.material) {
+      mesh.material.opacity = displayParams.opacity;
+      mesh.material.transparent = true;
+      
+      // Mode fil de fer
+      if (displayParams.wireframe) {
+        mesh.material.wireframe = true;
+      } else {
+        mesh.material.wireframe = false;
+      }
+    }
+  });
+  
+  // Mettre à jour l'affichage des valeurs
+  updateDisplayValues();
+}
+
+// ====================== CONTRÔLES UI ======================
+function setupControls() {
+  // Échelle XY
+  const scaleXY = document.getElementById('scaleXY');
+  scaleXY.oninput = (e) => {
+    displayParams.scaleXY = parseFloat(e.target.value);
+    document.getElementById('scaleXY-val').innerHTML = displayParams.scaleXY.toFixed(2);
+    applyAllAdjustments();
+  };
+  
+  // Échelle Y
+  const scaleY = document.getElementById('scaleY');
+  scaleY.oninput = (e) => {
+    displayParams.scaleY = parseFloat(e.target.value);
+    document.getElementById('scaleY-val').innerHTML = displayParams.scaleY.toFixed(2);
+    applyAllAdjustments();
+  };
+  
+  // Rotation
+  const rotation = document.getElementById('rotation');
+  rotation.oninput = (e) => {
+    displayParams.rotation = parseFloat(e.target.value);
+    document.getElementById('rotation-val').innerHTML = displayParams.rotation + '°';
+    applyAllAdjustments();
+  };
+  
+  // Décalage X
+  const offsetX = document.getElementById('offsetX');
+  offsetX.oninput = (e) => {
+    displayParams.offsetX = parseFloat(e.target.value);
+    document.getElementById('offsetX-val').innerHTML = displayParams.offsetX.toFixed(1);
+    applyAllAdjustments();
+  };
+  
+  // Décalage Z
+  const offsetZ = document.getElementById('offsetZ');
+  offsetZ.oninput = (e) => {
+    displayParams.offsetZ = parseFloat(e.target.value);
+    document.getElementById('offsetZ-val').innerHTML = displayParams.offsetZ.toFixed(1);
+    applyAllAdjustments();
+  };
+  
+  // Opacité
+  const opacity = document.getElementById('opacity');
+  opacity.oninput = (e) => {
+    displayParams.opacity = parseFloat(e.target.value);
+    document.getElementById('opacity-val').innerHTML = Math.round(displayParams.opacity * 100) + '%';
+    applyAllAdjustments();
+  };
+  
+  // Hauteur min
+  const minHeight = document.getElementById('minHeight');
+  minHeight.oninput = (e) => {
+    displayParams.minHeight = parseFloat(e.target.value);
+    document.getElementById('minHeight-val').innerHTML = displayParams.minHeight;
+  };
+  
+  // Hauteur max
+  const maxHeight = document.getElementById('maxHeight');
+  maxHeight.oninput = (e) => {
+    displayParams.maxHeight = parseFloat(e.target.value);
+    document.getElementById('maxHeight-val').innerHTML = displayParams.maxHeight;
+  };
+  
+  // Mode fil de fer
+  const wireframe = document.getElementById('showWireframe');
+  wireframe.onchange = (e) => {
+    displayParams.wireframe = e.target.checked;
+    applyAllAdjustments();
+  };
+  
+  // Bouton recharger
+  document.getElementById('reload-buildings').onclick = () => loadOSMBuildings();
+  
+  // Bouton réinitialiser
+  document.getElementById('reset-controls').onclick = () => {
+    displayParams = {
+      scaleXY: 1.0, scaleY: 1.0, rotation: 0,
+      offsetX: 0, offsetZ: 0, opacity: 0.75,
+      minHeight: 5, maxHeight: 30, wireframe: false
+    };
+    
+    // Réinitialiser les sliders
+    scaleXY.value = 1.0;
+    scaleY.value = 1.0;
+    rotation.value = 0;
+    offsetX.value = 0;
+    offsetZ.value = 0;
+    opacity.value = 0.75;
+    minHeight.value = 5;
+    maxHeight.value = 30;
+    wireframe.checked = false;
+    
+    applyAllAdjustments();
+    updateStatus('Contrôles réinitialisés');
+  };
+  
+  // Bouton tout effacer
+  document.getElementById('clear-all').onclick = () => {
+    osmMeshes.forEach(m => scene.remove(m));
+    osmMeshes = [];
+    navigationArrows.forEach(a => scene.remove(a));
+    navigationArrows = [];
+    updateBuildingCount(0);
+    updateStatus('Tout effacé');
+  };
+}
+
+function updateDisplayValues() {
+  document.getElementById('scaleXY-val').innerHTML = displayParams.scaleXY.toFixed(2);
+  document.getElementById('scaleY-val').innerHTML = displayParams.scaleY.toFixed(2);
+  document.getElementById('rotation-val').innerHTML = displayParams.rotation + '°';
+  document.getElementById('offsetX-val').innerHTML = displayParams.offsetX.toFixed(1);
+  document.getElementById('offsetZ-val').innerHTML = displayParams.offsetZ.toFixed(1);
+  document.getElementById('opacity-val').innerHTML = Math.round(displayParams.opacity * 100) + '%';
+}
+
+function updateBuildingCount(count) {
+  const badge = document.getElementById('building-count');
+  badge.innerHTML = `🏢 Bâtiments: ${count}`;
+}
+
+// ====================== FLÈCHES DE NAVIGATION ======================
+function createArrow() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.5, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  body.rotation.x = Math.PI / 2;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.4, 16), 
+    new THREE.MeshPhongMaterial({ color: 0xffdd00 }));
+  head.rotation.x = Math.PI / 2;
+  head.position.z = 2.3;
+  group.add(head);
+  return group;
+}
+
+function setDestination() {
+  const lat = parseFloat(prompt("Latitude destination :", currentPosition.lat + 0.002));
+  const lon = parseFloat(prompt("Longitude destination :", currentPosition.lon + 0.002));
+  if (lat && lon) {
+    destination = { lat, lon };
+    updateNavigation();
+  }
+}
+
+function updateNavigation() {
+  if (!destination) return;
+  const bearing = calculateBearing(currentPosition.lat, currentPosition.lon, destination.lat, destination.lon);
+  const angle = bearing * Math.PI / 180;
+
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+
+  for (let i = 1; i <= 6; i++) {
+    const arrow = createArrow();
+    arrow.rotation.y = angle;
+    arrow.position.set(Math.sin(angle) * 2, 0.3, -i * 6);
+    scene.add(arrow);
+    navigationArrows.push(arrow);
+  }
+  updateStatus(`→ Direction ${bearing.toFixed(0)}°`);
+}
+
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const λ1 = lon1 * Math.PI / 180, λ2 = lon2 * Math.PI / 180;
+  const y = Math.sin(λ2-λ1) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
+  let brng = Math.atan2(y, x) * 180 / Math.PI;
+  return (brng + 360) % 360;
+}
+
+// ====================== UI PRINCIPALE ======================
+function setupUI() {
+  const ui = document.getElementById('ui');
+  
+  const navGroup = document.createElement('div');
+  navGroup.className = 'control-group';
+  navGroup.innerHTML = '<h3>🧭 Navigation</h3>';
+  
+  const destBtn = document.createElement('button');
+  destBtn.textContent = '🎯 Définir Destination';
+  destBtn.onclick = setDestination;
+  navGroup.appendChild(destBtn);
+  
+  const clearArrowsBtn = document.createElement('button');
+  clearArrowsBtn.textContent = '🗑️ Effacer Flèches';
+  clearArrowsBtn.onclick = () => {
+    navigationArrows.forEach(a => scene.remove(a));
+    navigationArrows = [];
+    updateStatus('Flèches effacées');
+  };
+  navGroup.appendChild(clearArrowsBtn);
+  
+  ui.appendChild(navGroup);
+}
+
+function updateStatus(text) {
+  const statusDiv = document.getElementById('status');
+  statusDiv.innerHTML = text;
+}
+
+window.onload = init;
+  </script>
+</body>
+</html>
