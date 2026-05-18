@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Nav OSM - Bâtiments avec noms</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    #ar-container { position: fixed; inset: 0; }
+    canvas { position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; }
+    #ar-controls {
+      position: fixed; bottom: 80px; left: 10px; right: 10px;
+      background: rgba(0,0,0,.95); backdrop-filter: blur(20px); border-radius: 16px;
+      padding: 12px; z-index: 99999; pointer-events:auto;
+      border: 1px solid rgba(102,126,234,.5); max-height: 45vh; overflow-y:auto;
+    }
+    .control-row { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; align-items:center; }
+    .control-item { flex:1; min-width:100px; }
+    .control-item label { display:block; font-size:10px; color:#aaa; margin-bottom:3px; }
+    .control-item input[type="range"] { width:100%; }
+    .control-value { font-size:10px; color:#4ecdc4; text-align:right; margin-top:3px; font-family:monospace; }
+    .control-group-title { font-size:11px; font-weight:bold; color:#4ecdc4; margin:8px 0 5px; border-left:2px solid #4ecdc4; padding-left:8px; }
+    button.small-btn, #ar-entry-btn { background: linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:#fff; border:none; cursor:pointer; }
+    button.small-btn { border-radius:6px; padding:6px 12px; font-size:11px; margin:2px; }
+    .status-bar, .badge-ar { position:fixed; top:10px; background:rgba(0,0,0,.85); backdrop-filter:blur(10px); z-index:10000; font-size:11px; }
+    .status-bar { left:10px; right:10px; border-radius:12px; padding:8px 12px; color:#0f0; font-family:monospace; pointer-events:none; }
+    .badge-ar { right:10px; padding:6px 12px; border-radius:20px; color:#ffaa44; font-family:monospace; }
+    #ar-entry-btn { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); padding:16px 32px; font-size:1.2em; z-index:100001; border-radius:50px; font-weight:bold; }
+  </style>
+</head>
+<body>
+<div id="ar-container">
+  <div class="status-bar"><span id="status-text">📡 Initialisation...</span><span id="gps-coords" style="float:right;">🌍 --°</span></div>
+  <div class="badge-ar" id="building-count-ar">🏢 Bâtiments: 0</div>
+  <div id="ar-controls">
+    <div class="control-group-title">🏢 POSITIONNEMENT DES BÂTIMENTS</div>
+    <div class="control-row"><div class="control-item"><label>📏 Échelle XY</label><input type="range" id="ar-scaleXY" min="0.3" max="2.5" step="0.01" value="1"><div class="control-value" id="ar-scaleXY-val">1.00</div></div></div>
+    <div class="control-row"><button id="ar-reload" class="small-btn">🔄 Recharger</button></div>
+  </div>
+</div>
+<button id="ar-entry-btn">🎯 ENTRER EN AR</button>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script>
+let scene,camera,renderer,xrSession=null;
+let currentPosition={lat:-18.8792,lon:47.5079};
+let osmMeshes=[], buildingLabels=[];
+let groundGroup=new THREE.Group(), buildingsGroup=new THREE.Group();
+let displayParams={scaleXY:1,opacity:.75,groundTilt:0};
+function updateStatus(t){document.getElementById('status-text').innerHTML=t;}
+function projectLatLon(lat, lon){const scale=111300; return new THREE.Vector2((lon-currentPosition.lon)*scale*Math.cos(currentPosition.lat*Math.PI/180),(currentPosition.lat-lat)*scale);}
+function createBuildingLabel(text, position, height){ if(!text) return null; const c=document.createElement('canvas'); c.width=512;c.height=128; const ctx=c.getContext('2d'); ctx.fillStyle='rgba(0,0,80,.8)'; ctx.fillRect(0,0,c.width,c.height); ctx.fillStyle='#fff'; ctx.font='bold 36px Arial'; ctx.textAlign='center'; const trimmed=text.length>22?text.slice(0,22)+'…':text; ctx.fillText(trimmed,c.width/2,76); const tex=new THREE.CanvasTexture(c); const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true})); sprite.scale.set(8,2,1); sprite.position.set(position.x,height/2,position.z); return sprite; }
+async function loadOSMBuildings(){ updateStatus('Chargement OSM...'); const radius=.003; const query=`[out:json];(way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius}););out body geom;`; try{ const res=await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`); const data=await res.json(); while(buildingsGroup.children.length>0) buildingsGroup.remove(buildingsGroup.children[0]); osmMeshes=[]; buildingLabels=[]; data.elements.forEach(building=>{ if(!building.geometry||building.geometry.length<3) return; const pts=building.geometry.map(p=>projectLatLon(p.lat,p.lon)); if(pts.length<3) return; try{ const shape=new THREE.Shape(pts); let height=Math.min(Math.max(parseFloat(building.tags?.height)||8,3),30); const extrude=new THREE.ExtrudeGeometry(shape,{depth:height, bevelEnabled:false}); extrude.computeBoundingBox(); const center=extrude.boundingBox.getCenter(new THREE.Vector3()); extrude.translate(-center.x,0,-center.z); const mesh=new THREE.Mesh(extrude,new THREE.MeshPhongMaterial({color:0x4488ff,transparent:true,opacity:displayParams.opacity})); mesh.rotation.x=-Math.PI/2; mesh.userData.originalPos=new THREE.Vector3(center.x,0,center.z); mesh.position.copy(mesh.userData.originalPos); buildingsGroup.add(mesh); osmMeshes.push(mesh); const name=building.tags?.name || building.tags?.['addr:housename']; if(name){ const label=createBuildingLabel(name, mesh.position, height); if(label){ buildingsGroup.add(label); buildingLabels.push(label);} } }catch(e){} }); document.getElementById('building-count-ar').innerHTML=`🏢 ${osmMeshes.length} bâtiments`; updateStatus(`✅ ${osmMeshes.length} bâtiments chargés`);}catch(e){updateStatus('❌ Erreur OSM'); console.error(e);} }
+function animate(){ buildingLabels.forEach(l=>l.lookAt(camera.position)); renderer.render(scene,camera); }
+function setupARButton(){ document.getElementById('ar-entry-btn').onclick=async()=>{ if(!navigator.xr){alert('WebXR non supporté'); return;} try{ xrSession=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['local-floor']}); renderer.xr.setSession(xrSession); document.getElementById('ar-entry-btn').style.display='none'; }catch(e){ alert(e.message); } }; }
+function init(){ scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, .01, 300); renderer=new THREE.WebGLRenderer({antialias:true, alpha:true}); renderer.setSize(innerWidth, innerHeight); renderer.xr.enabled=true; document.body.appendChild(renderer.domElement); scene.add(groundGroup); groundGroup.add(buildingsGroup); groundGroup.add(new THREE.GridHelper(100,20,0x88aaff,0x335588)); scene.add(new THREE.HemisphereLight(0xffffff,0x8888ff,1.2)); const d=new THREE.DirectionalLight(0xffffff,.8); d.position.set(10,20,5); scene.add(d); setupARButton(); document.getElementById('ar-reload').onclick=loadOSMBuildings; if(navigator.geolocation){ navigator.geolocation.watchPosition(p=>{ currentPosition={lat:p.coords.latitude, lon:p.coords.longitude}; document.getElementById('gps-coords').textContent=`${currentPosition.lat.toFixed(5)}°, ${currentPosition.lon.toFixed(5)}°`; }); } setTimeout(loadOSMBuildings, 2000); renderer.setAnimationLoop(animate); }
+window.onload=init;
+</script>
+</body>
+</html>
