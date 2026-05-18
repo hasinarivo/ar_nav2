@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>AR OSM calibré</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:sans-serif}
+#split{position:fixed;inset:0;display:flex;flex-direction:column}
+#ar-view{position:relative;height:50vh;background:#000}
+#map{height:50vh;width:100%}
+canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#status,#panel{position:absolute;left:10px;z-index:9999;background:rgba(0,0,0,.75);color:#fff;padding:8px;border-radius:8px;font-size:12px}
+#status{top:10px;color:#0f0}
+#panel{bottom:10px}
+button{background:#3366ff;color:white;border:none;padding:10px 14px;border-radius:8px;font-weight:bold}
+</style>
+</head>
+<body>
+<div id="split">
+  <div id="ar-view">
+    <div id="status">Initialisation...</div>
+    <div id="panel"><button id="recalibrateBtn">📍 Recaler ici</button></div>
+  </div>
+  <div id="map"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let scene,camera,renderer,map,userMarker,headingLine,buildingsGroup;
+let currentPosition=null,currentHeading=0;
+let calibrationOffset={x:0,z:0,heading:0};
+let loadedOnce=false;
+const status=(t)=>document.getElementById('status').textContent=t;
+
+function initMap(){
+ map=L.map('map').setView([-18.8792,47.5079],19);
+ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22}).addTo(map);
+ userMarker=L.circleMarker([-18.8792,47.5079],{radius:8,color:'blue'}).addTo(map);
+ headingLine=L.polyline([[-18.8792,47.5079],[-18.8791,47.5079]],{color:'red'}).addTo(map);
+}
+
+function initAR(){
+ scene=new THREE.Scene();
+ camera=new THREE.PerspectiveCamera(70,window.innerWidth/(window.innerHeight/2),0.1,500);
+ renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
+ renderer.setSize(window.innerWidth,window.innerHeight/2);
+ document.getElementById('ar-view').appendChild(renderer.domElement);
+ buildingsGroup=new THREE.Group();
+ scene.add(buildingsGroup);
+ scene.add(new THREE.HemisphereLight(0xffffff,0x444444,1.5));
+ const light=new THREE.DirectionalLight(0xffffff,1); light.position.set(20,40,10); scene.add(light);
+ renderer.setAnimationLoop(animate);
+}
+
+function animate(){ renderer.render(scene,camera); }
+
+function latLonToMeters(lat,lon,origin){
+ const R=6378137;
+ const dLat=(lat-origin.lat)*Math.PI/180;
+ const dLon=(lon-origin.lon)*Math.PI/180;
+ let x=dLon*R*Math.cos(origin.lat*Math.PI/180);
+ let z=-dLat*R;
+ const angle=THREE.MathUtils.degToRad(calibrationOffset.heading);
+ const rx=x*Math.cos(angle)-z*Math.sin(angle);
+ const rz=x*Math.sin(angle)+z*Math.cos(angle);
+ return {x:rx+calibrationOffset.x,z:rz+calibrationOffset.z};
+}
+
+async function loadBuildings(){
+ if(!currentPosition) return;
+ status('Chargement bâtiments...');
+ const r=0.0015;
+ const q=`[out:json];way["building"](${currentPosition.lat-r},${currentPosition.lon-r},${currentPosition.lat+r},${currentPosition.lon+r});out body geom;`;
+ const res=await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(q));
+ const data=await res.json();
+ while(buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]);
+ data.elements.forEach(b=>{
+   if(!b.geometry||b.geometry.length<3) return;
+   const pts=b.geometry.map(p=>latLonToMeters(p.lat,p.lon,currentPosition));
+   const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p.x,p.z)));
+   const h=Math.min(parseFloat(b.tags?.height)||12,40);
+   const geo=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false});
+   geo.rotateX(-Math.PI/2);
+   const mesh=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x4488ff,transparent:true,opacity:.7}));
+   buildingsGroup.add(mesh);
+ });
+ loadedOnce=true;
+ status('AR synchronisé');
+}
+
+function updateLocation(pos){
+ currentPosition={lat:pos.coords.latitude,lon:pos.coords.longitude};
+ userMarker.setLatLng([currentPosition.lat,currentPosition.lon]);
+ map.setView([currentPosition.lat,currentPosition.lon],19);
+ updateHeadingLine();
+ if(!loadedOnce) loadBuildings();
+}
+
+function updateHeadingLine(){
+ if(!currentPosition) return;
+ const dist=0.00012;
+ const a=currentHeading*Math.PI/180;
+ const lat2=currentPosition.lat+Math.cos(a)*dist;
+ const lon2=currentPosition.lon+Math.sin(a)*dist;
+ headingLine.setLatLngs([[currentPosition.lat,currentPosition.lon],[lat2,lon2]]);
+}
+
+function setupOrientation(){
+ function apply(alpha){
+   currentHeading=(360-alpha)%360;
+   const corrected=currentHeading+calibrationOffset.heading;
+   camera.rotation.set(0,THREE.MathUtils.degToRad(corrected),0);
+   updateHeadingLine();
+ }
+ window.addEventListener('deviceorientationabsolute',e=>{ if(e.alpha!=null) apply(e.alpha); });
+ window.addEventListener('deviceorientation',e=>{ if(e.alpha!=null) apply(e.alpha); });
+}
+
+function setupRecalibration(){
+ document.getElementById('recalibrateBtn').onclick=()=>{
+   calibrationOffset.heading = -currentHeading;
+   calibrationOffset.x = 0;
+   calibrationOffset.z = -8; // recule légèrement pour aligner bâtiment devant
+   loadedOnce=false;
+   loadBuildings();
+   status('Recalage appliqué');
+ };
+}
+
+window.onload=()=>{
+ initMap();
+ initAR();
+ setupOrientation();
+ setupRecalibration();
+ navigator.geolocation.watchPosition(updateLocation,console.error,{enableHighAccuracy:true,maximumAge:500,timeout:10000});
+};
+</script>
+</body>
+</html>
