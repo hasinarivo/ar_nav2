@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>AR + OSM Split View</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:sans-serif}
+#split{position:fixed;inset:0;display:flex;flex-direction:column}
+#ar-view{position:relative;height:50vh;background:#000}
+#map{height:50vh;width:100%}
+canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#status{position:absolute;top:10px;left:10px;z-index:9999;background:rgba(0,0,0,.7);color:#0f0;padding:8px;border-radius:8px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="split">
+  <div id="ar-view"><div id="status">Initialisation...</div></div>
+  <div id="map"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let scene,camera,renderer,map,userMarker,headingLine,buildingsGroup;
+let currentPosition=null,currentHeading=0;
+const status=(t)=>document.getElementById('status').textContent=t;
+
+function initMap(){
+  map=L.map('map',{zoomControl:true}).setView([-18.8792,47.5079],18);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22}).addTo(map);
+  userMarker=L.circleMarker([-18.8792,47.5079],{radius:8,color:'blue'}).addTo(map);
+  headingLine=L.polyline([[-18.8792,47.5079],[-18.8791,47.5079]],{color:'red'}).addTo(map);
+}
+
+function initAR(){
+  scene=new THREE.Scene();
+  camera=new THREE.PerspectiveCamera(70, window.innerWidth/(window.innerHeight/2), 0.1, 500);
+  renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight/2);
+  document.getElementById('ar-view').appendChild(renderer.domElement);
+  buildingsGroup=new THREE.Group(); scene.add(buildingsGroup);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x444444,1.5));
+  renderer.setAnimationLoop(()=>renderer.render(scene,camera));
+}
+
+function latLonToMeters(lat,lon,origin){
+  const R=6378137;
+  const dLat=(lat-origin.lat)*Math.PI/180;
+  const dLon=(lon-origin.lon)*Math.PI/180;
+  const x=dLon*R*Math.cos(origin.lat*Math.PI/180);
+  const z=-dLat*R;
+  return {x,z};
+}
+
+async function loadBuildings(){
+  if(!currentPosition) return;
+  const r=0.0015;
+  const q=`[out:json];way["building"](${currentPosition.lat-r},${currentPosition.lon-r},${currentPosition.lat+r},${currentPosition.lon+r});out body geom;`;
+  const res=await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(q));
+  const data=await res.json();
+  while(buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]);
+  data.elements.forEach(b=>{
+    if(!b.geometry||b.geometry.length<3) return;
+    const pts=b.geometry.map(p=>latLonToMeters(p.lat,p.lon,currentPosition));
+    const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p.x,p.z)));
+    const h=Math.min(parseFloat(b.tags?.height)||12,40);
+    const geo=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false});
+    geo.rotateX(-Math.PI/2);
+    const mesh=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x4488ff,transparent:true,opacity:.7}));
+    buildingsGroup.add(mesh);
+  });
+  status('Bâtiments synchronisés');
+}
+
+function updateLocation(pos){
+  currentPosition={lat:pos.coords.latitude, lon:pos.coords.longitude};
+  map.setView([currentPosition.lat,currentPosition.lon],19);
+  userMarker.setLatLng([currentPosition.lat,currentPosition.lon]);
+  const dist=0.00015;
+  const lat2=currentPosition.lat + Math.cos(currentHeading*Math.PI/180)*dist;
+  const lon2=currentPosition.lon + Math.sin(currentHeading*Math.PI/180)*dist;
+  headingLine.setLatLngs([[currentPosition.lat,currentPosition.lon],[lat2,lon2]]);
+  loadBuildings();
+}
+
+function setupOrientation(){
+  window.addEventListener('deviceorientationabsolute', e=>{
+    if(e.alpha==null) return;
+    currentHeading = 360 - e.alpha;
+    camera.rotation.set(0, THREE.MathUtils.degToRad(currentHeading), 0);
+    if(currentPosition){
+      const dist=0.00015;
+      const lat2=currentPosition.lat + Math.cos(currentHeading*Math.PI/180)*dist;
+      const lon2=currentPosition.lon + Math.sin(currentHeading*Math.PI/180)*dist;
+      headingLine.setLatLngs([[currentPosition.lat,currentPosition.lon],[lat2,lon2]]);
+    }
+  });
+}
+
+window.onload=()=>{
+  initMap();
+  initAR();
+  setupOrientation();
+  navigator.geolocation.watchPosition(updateLocation, console.error, {enableHighAccuracy:true, maximumAge:1000});
+};
+</script>
+</body>
+</html>
