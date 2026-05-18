@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>AR Nav OSM WebXR + Carte</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:'Segoe UI',sans-serif}
+#ar-container{position:fixed;inset:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+#map-container{position:fixed;left:0;right:0;bottom:0;height:40vh;z-index:9998;display:none;border-top:2px solid rgba(255,255,255,.25)}
+#map{width:100%;height:100%}
+#ar-entry-btn{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);padding:16px 32px;font-size:1.1em;z-index:100001;border:none;border-radius:50px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;font-weight:bold}
+.status-bar{position:fixed;top:10px;left:10px;right:10px;background:rgba(0,0,0,.8);padding:8px 12px;border-radius:12px;color:#0f0;z-index:10000;font-family:monospace;font-size:11px}
+#recalibrateBtn{position:fixed;bottom:calc(40vh + 20px);left:10px;z-index:10000;padding:10px 14px;border:none;border-radius:10px;background:#3366ff;color:#fff;display:none}
+#compass{position:fixed;bottom:12px;right:12px;width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.7);z-index:10000;display:none;justify-content:center;align-items:center;border:2px solid white}
+#arrow{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:24px solid #2ea3ff;transform-origin:50% 70%}
+</style>
+</head>
+<body>
+<div id="ar-container">
+  <div class="status-bar"><span id="status-text">📡 Initialisation...</span><span id="gps-coords" style="float:right">🌍 --</span></div>
+</div>
+<div id="map-container"><div id="map"></div></div>
+<div id="compass"><div id="arrow"></div></div>
+<button id="recalibrateBtn">📍 Recaler ici</button>
+<button id="ar-entry-btn">🎯 ENTRER EN AR</button>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let scene,camera,renderer,xrSession=null,map,userMarker,headingLine;
+let currentPosition={lat:-18.8792,lon:47.5079}, currentHeading=0;
+let buildingsGroup=new THREE.Group(); let calibration={x:0,z:0,heading:0}; let loaded=false;
+function updateStatus(t){document.getElementById('status-text').textContent=t;}
+function init(){
+ scene=new THREE.Scene();
+ camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.01,500);
+ renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
+ renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true; document.body.appendChild(renderer.domElement);
+ scene.add(buildingsGroup); scene.add(new THREE.HemisphereLight(0xffffff,0x8888ff,1.2));
+ const d=new THREE.DirectionalLight(0xffffff,.8); d.position.set(10,20,5); scene.add(d);
+ renderer.setAnimationLoop(()=>{document.getElementById('arrow').style.transform=`rotate(${currentHeading}deg)`; renderer.render(scene,camera);});
+ setupARButton(); setupSensors();
+ navigator.geolocation.watchPosition(p=>{currentPosition={lat:p.coords.latitude,lon:p.coords.longitude}; document.getElementById('gps-coords').textContent=`${currentPosition.lat.toFixed(5)}, ${currentPosition.lon.toFixed(5)}`; updateMap(); if(!loaded && xrSession) loadOSMBuildings();},{},{enableHighAccuracy:true,maximumAge:500});
+}
+function setupARButton(){document.getElementById('ar-entry-btn').onclick=async()=>{try{xrSession=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['local-floor']}); renderer.xr.setSession(xrSession); document.getElementById('ar-entry-btn').style.display='none'; document.getElementById('map-container').style.display='block'; document.getElementById('recalibrateBtn').style.display='block'; document.getElementById('compass').style.display='flex'; initMap(); loadOSMBuildings();}catch(e){alert('WebXR non supporté: '+e.message)}}}
+function initMap(){ if(map) return; map=L.map('map').setView([currentPosition.lat,currentPosition.lon],19); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22}).addTo(map); userMarker=L.circleMarker([currentPosition.lat,currentPosition.lon],{radius:8,color:'blue'}).addTo(map); headingLine=L.polyline([[currentPosition.lat,currentPosition.lon],[currentPosition.lat,currentPosition.lon]],{color:'red'}).addTo(map); }
+function updateMap(){ if(!map) return; userMarker.setLatLng([currentPosition.lat,currentPosition.lon]); map.setView([currentPosition.lat,currentPosition.lon],19); const d=0.00012,a=currentHeading*Math.PI/180; headingLine.setLatLngs([[currentPosition.lat,currentPosition.lon],[currentPosition.lat+Math.cos(a)*d,currentPosition.lon+Math.sin(a)*d]]); }
+function setupSensors(){
+ window.addEventListener('deviceorientationabsolute',handleOrientation);
+ window.addEventListener('deviceorientation',handleOrientation);
+ document.getElementById('recalibrateBtn').onclick=()=>{calibration.heading=-currentHeading; loaded=false; loadOSMBuildings(); updateStatus('Recalage appliqué');};
+}
+function handleOrientation(e){ if(e.alpha==null) return; currentHeading=(360-e.alpha)%360; camera.rotation.y=THREE.MathUtils.degToRad(currentHeading+calibration.heading); updateMap(); }
+function project(lat,lon){ const R=6378137; let dLat=(lat-currentPosition.lat)*Math.PI/180; let dLon=(lon-currentPosition.lon)*Math.PI/180; let x=dLon*R*Math.cos(currentPosition.lat*Math.PI/180), z=-dLat*R; const a=(currentHeading+calibration.heading)*Math.PI/180; const rx=x*Math.cos(a)-z*Math.sin(a), rz=x*Math.sin(a)+z*Math.cos(a); return new THREE.Vector2(rx,rz); }
+async function loadOSMBuildings(){ if(!xrSession) return; updateStatus('Chargement bâtiments...'); const r=.0015; const q=`[out:json];way["building"](${currentPosition.lat-r},${currentPosition.lon-r},${currentPosition.lat+r},${currentPosition.lon+r});out body geom;`; try{ const res=await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(q)); const data=await res.json(); while(buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]); data.elements.forEach(b=>{ if(!b.geometry||b.geometry.length<3) return; try{ const pts=b.geometry.map(p=>project(p.lat,p.lon)); const shape=new THREE.Shape(pts); const h=Math.min(parseFloat(b.tags?.height)||10,40); const geo=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}); geo.rotateX(-Math.PI/2); const mesh=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x4488ff,transparent:true,opacity:.7})); buildingsGroup.add(mesh);}catch(_){} }); loaded=true; updateStatus('✅ AR + carte synchronisées'); }catch(e){updateStatus('❌ erreur OSM');}}
+window.onload=init;
+</script>
+</body>
+</html>
