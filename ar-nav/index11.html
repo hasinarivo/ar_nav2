@@ -242,6 +242,7 @@ let currentPosition = { lat: -18.8792, lon: 47.5079 };
 let destination = null;
 let navigationArrows = [];
 let osmMeshes = [];
+let buildingLabels = [];
 
 // Groupe pour le sol (tout ce qui peut être incliné)
 let groundGroup = new THREE.Group();
@@ -385,12 +386,50 @@ function distance(pos1, pos2) {
 }
 
 // ====================== OSM BÂTIMENTS ======================
+function createBuildingLabel(text, position, height) {
+  if (!text) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,80,0.8)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 42px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, canvas.width / 2, 75);
+
+  const texture = new THREE.CanvasTexture(canvas);
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true
+  });
+
+  const sprite = new THREE.Sprite(material);
+
+  sprite.scale.set(8, 2, 1);
+  sprite.position.set(position.x, height / 2, position.z);
+
+  return sprite;
+}
+
 async function loadOSMBuildings() {
   updateStatus("Chargement OSM...");
   
   const radius = 0.003;
-  const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
-  
+  //const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
+  const query = `
+[out:json];
+(
+  way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});
+);
+out body geom;
+`;
+
   try {
     const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
     const data = await res.json();
@@ -400,6 +439,9 @@ async function loadOSMBuildings() {
       buildingsGroup.remove(buildingsGroup.children[0]);
     }
     osmMeshes = [];
+    
+    buildingLabels.forEach(label => buildingsGroup.remove(label));
+    buildingLabels = [];
 
     data.elements.forEach(building => {
       if (!building.geometry || building.geometry.length < 3) return;
@@ -444,6 +486,22 @@ async function loadOSMBuildings() {
         
         buildingsGroup.add(mesh);
         osmMeshes.push(mesh);
+
+        // Ajouter un label pour les bâtiments avec un nom
+        const buildingName = building.tags?.name || building.tags?.["addr:housename"];
+
+        if (buildingName) {
+        const label = createBuildingLabel(
+            buildingName,
+            mesh.position,
+            height
+        );
+
+        if (label) {
+            buildingsGroup.add(label);
+            buildingLabels.push(label);
+        }
+        }
       } catch(e) { console.warn(e); }
     });
 
