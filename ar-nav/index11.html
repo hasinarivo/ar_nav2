@@ -420,7 +420,7 @@ function createBuildingLabel(text, position, height) {
 async function loadOSMBuildings() {
   updateStatus("Chargement OSM...");
   
-  const radius = 0.003;
+  const radius = 0.001;
   //const query = `[out:json];way["building"](${currentPosition.lat-radius},${currentPosition.lon-radius},${currentPosition.lat+radius},${currentPosition.lon+radius});out geom;`;
   const query = `
 [out:json];
