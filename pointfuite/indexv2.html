@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<title>Localisation urbaine WebXR + OSM + OpenCV</title>
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:Arial,sans-serif}
+#video,#canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+#hud{position:absolute;top:10px;left:10px;z-index:20;color:#fff;background:rgba(0,0,0,.65);padding:12px;border-radius:14px;max-width:380px}
+button{width:100%;padding:12px;margin-top:8px;font-size:16px}
+</style>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+<div id="hud">
+<h3>Localisation réelle par points de fuite</h3>
+<div id="info">Chargement…</div>
+<button id="start">Entrer en RA</button>
+</div>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+let gps, buildings = [], cameraMatrix;
+
+async function getBuildings(lat, lon) {
+  const q = `[out:json];way[building](around:120,${lat},${lon});out geom;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:q });
+  const j = await r.json();
+  buildings = j.elements || [];
+}
+
+function initCameraMatrix(w,h){
+  const f = w*1.2;
+  cameraMatrix = cv.matFromArray(3,3,cv.CV_64F,[f,0,w/2, 0,f,h/2, 0,0,1]);
+}
+
+function detectVanishingAndPose(){
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  const edges = new cv.Mat();
+  cv.Canny(gray, edges, 60, 150);
+  const lines = new cv.Mat();
+  cv.HoughLinesP(edges, lines, 1, Math.PI/180, 50, 50, 10);
+  let lineData=[];
+  for(let i=0;i<lines.rows;i++){
+    const l=lines.data32S.slice(i*4,i*4+4);
+    lineData.push({x1:l[0],y1:l[1],x2:l[2],y2:l[3]});
+    ctx.strokeStyle='lime';ctx.beginPath();ctx.moveTo(l[0],l[1]);ctx.lineTo(l[2],l[3]);ctx.stroke();
+  }
+  src.delete(); gray.delete(); edges.delete(); lines.delete();
+  if(lineData.length<4) return null;
+  const vp = estimateVP(lineData);
+  return vp;
+}
+
+function estimateVP(lines){
+  const intersections=[];
+  for(let i=0;i<Math.min(lines.length,40);i++) for(let j=i+1;j<Math.min(lines.length,40);j++){
+    const p = intersect(lines[i], lines[j]);
+    if(p && p.x>0 && p.x<canvas.width && p.y>0 && p.y<canvas.height) intersections.push(p);
+  }
+  if(intersections.length<3) return null;
+  return intersections.slice(0,3);
+}
+
+function intersect(a,b){
+  const d=(a.x1-a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1-b.x2);
+  if(Math.abs(d)<1e-6) return null;
+  const x=((a.x1*a.y2-a.y1*a.x2)*(b.x1-b.x2)-(a.x1-a.x2)*(b.x1*b.y2-b.y1*b.x2))/d;
+  const y=((a.x1*a.y2-a.y1*a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1*b.y2-b.y1*b.x2))/d;
+  return {x,y};
+}
+
+function solvePose(vps){
+  const objectPoints = [];
+  const imagePoints = [];
+  buildings.slice(0,6).forEach((b,i)=>{
+    if(!b.geometry) return;
+    const p=b.geometry[0];
+    objectPoints.push((p.lon-gps.lon)*111320, (p.lat-gps.lat)*110540, 0);
+    imagePoints.push(vps[i%vps.length].x, vps[i%vps.length].y);
+  });
+  if(objectPoints.length<12) return null;
+  const obj = cv.matFromArray(objectPoints.length/3,1,cv.CV_32FC3,objectPoints);
+  const img = cv.matFromArray(imagePoints.length/2,1,cv.CV_32FC2,imagePoints);
+  const rvec = new cv.Mat(), tvec = new cv.Mat();
+  cv.solvePnP(obj,img,cameraMatrix,new cv.Mat(),rvec,tvec,false,cv.SOLVEPNP_EPNP);
+  return {rvec,tvec};
+}
+
+function projectBuildings(pose){
+  const rvec = pose.rvec, tvec = pose.tvec;
+  buildings.slice(0,20).forEach(b=>{
+    if(!b.geometry) return;
+    const p = b.geometry[0];
+    const obj = cv.matFromArray(1,1,cv.CV_32FC3,[(p.lon-gps.lon)*111320,(p.lat-gps.lat)*110540,0]);
+    const imgPts = new cv.Mat();
+    cv.projectPoints(obj,rvec,tvec,cameraMatrix,new cv.Mat(),imgPts);
+    const x=imgPts.data32F[0], y=imgPts.data32F[1];
+    if(x>0 && y>0 && x<canvas.width && y<canvas.height){
+      ctx.fillStyle='cyan'; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill();
+    }
+    obj.delete(); imgPts.delete();
+  });
+}
+
+async function start(){
+  canvas.width = innerWidth; canvas.height = innerHeight;
+  const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  video.srcObject = stream;
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    gps = {lat:pos.coords.latitude, lon:pos.coords.longitude};
+    await getBuildings(gps.lat, gps.lon);
+    initCameraMatrix(canvas.width, canvas.height);
+    loop();
+  });
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  if(typeof cv==='undefined' || video.readyState<2) return;
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  const vps = detectVanishingAndPose();
+  if(!vps) return;
+  vps.forEach(p=>{ctx.fillStyle='red';ctx.beginPath();ctx.arc(p.x,p.y,8,0,Math.PI*2);ctx.fill();});
+  const pose = solvePose(vps);
+  if(!pose) return;
+  projectBuildings(pose);
+  const t = pose.tvec.data64F || pose.tvec.data32F;
+  info.textContent = `Position estimée: X ${t[0].toFixed(2)}m Y ${t[1].toFixed(2)}m Z ${t[2].toFixed(2)}m`;
+}
+
+document.getElementById('start').onclick = start;
+</script>
+</body>
+</html>
