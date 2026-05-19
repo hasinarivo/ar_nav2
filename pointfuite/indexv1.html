@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>RA localisation avancée par points de fuite</title>
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:Arial,sans-serif}
+video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+#ui{position:absolute;top:10px;left:10px;z-index:20;background:rgba(0,0,0,.7);color:#fff;padding:12px;border-radius:12px;max-width:380px}
+button{width:100%;padding:10px;margin-top:8px;font-size:16px}
+</style>
+</head>
+<body>
+<div id="ui">
+<h3>RA + OSM + points de fuite (version avancée)</h3>
+<div id="status">Initialisation…</div>
+<button id="startBtn">Entrer en RA</button>
+</div>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+<script>
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const statusEl=document.getElementById('status');
+let buildings=[], userGps=null;
+
+async function fetchBuildings(lat,lon){
+ const q=`[out:json];way[building](around:150,${lat},${lon});out geom;`;
+ const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:q});
+ const j=await r.json();
+ buildings=j.elements||[];
+}
+
+function detectLines(img){
+ const w=img.width,h=img.height,data=img.data; let lines=[];
+ for(let y=20;y<h-20;y+=12){
+  for(let x=20;x<w-20;x+=12){
+   const i=(y*w+x)*4;
+   const g=Math.abs(data[i]-data[i+4])+Math.abs(data[i]-data[i+w*4]);
+   if(g>80) lines.push({x1:x,y1:y,x2:x+40,y2:y+Math.random()*10-5});
+  }
+ }
+ return lines.slice(0,80);
+}
+
+function lineIntersection(a,b){
+ const d=(a.x1-a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1-b.x2);
+ if(Math.abs(d)<1e-5) return null;
+ const px=((a.x1*a.y2-a.y1*a.x2)*(b.x1-b.x2)-(a.x1-a.x2)*(b.x1*b.y2-b.y1*b.x2))/d;
+ const py=((a.x1*a.y2-a.y1*a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1*b.y2-b.y1*b.x2))/d;
+ return {x:px,y:py};
+}
+
+function detectVanishingPoints(lines,w,h){
+ let pts=[];
+ for(let i=0;i<lines.length;i++) for(let j=i+1;j<lines.length;j++){
+  const p=lineIntersection(lines[i],lines[j]);
+  if(p && isFinite(p.x)&&isFinite(p.y)&&p.x>-w&&p.x<2*w&&p.y>-h&&p.y<2*h) pts.push(p);
+ }
+ if(!pts.length) return [];
+ const clusters=[pts[0], pts[Math.floor(pts.length/2)], pts[pts.length-1]];
+ return clusters;
+}
+
+function estimateRotation(vps,w,h){
+ const fx=w, fy=w, cx=w/2, cy=h/2;
+ const dirs=vps.map(p=>[(p.x-cx)/fx,(p.y-cy)/fy,1]);
+ return {
+  yaw: Math.atan2(dirs[0][0], dirs[0][2]),
+  pitch: Math.atan2(dirs[2][1], dirs[2][2]),
+  roll: Math.atan2(dirs[1][1], dirs[1][0])
+ };
+}
+
+function projectBuilding(lat,lon,rot){
+ const dx=(lon-userGps.lon)*111320*Math.cos(userGps.lat*Math.PI/180);
+ const dy=(lat-userGps.lat)*110540;
+ const px=canvas.width/2 + dx*Math.cos(rot.yaw)-dy*Math.sin(rot.yaw);
+ const py=canvas.height/2 + dx*Math.sin(rot.pitch)-dy*Math.cos(rot.pitch);
+ return {x:px,y:py};
+}
+
+function refinePosition(rot){
+ let best={score:Infinity,lat:userGps.lat,lon:userGps.lon};
+ for(let a=-5;a<=5;a++) for(let b=-5;b<=5;b++){
+   let testLat=userGps.lat+a*0.00001;
+   let testLon=userGps.lon+b*0.00001;
+   let score=0;
+   for(const bd of buildings.slice(0,20)){
+     if(!bd.geometry) continue;
+     const p=bd.geometry[0];
+     score+=Math.abs((p.lat-testLat)+(p.lon-testLon));
+   }
+   if(score<best.score) best={score,lat:testLat,lon:testLon};
+ }
+ return best;
+}
+
+async function start(){
+ canvas.width=innerWidth; canvas.height=innerHeight;
+ const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+ video.srcObject=stream;
+ navigator.geolocation.getCurrentPosition(async pos=>{
+  userGps={lat:pos.coords.latitude, lon:pos.coords.longitude};
+  await fetchBuildings(userGps.lat,userGps.lon);
+  statusEl.textContent=`${buildings.length} bâtiments OSM chargés`;
+  render();
+ }, err=> alert('GPS requis'));
+}
+
+function render(){
+ requestAnimationFrame(render);
+ if(video.readyState<2) return;
+ ctx.drawImage(video,0,0,canvas.width,canvas.height);
+ const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+ const lines=detectLines(img);
+ const vps=detectVanishingPoints(lines,canvas.width,canvas.height);
+ if(vps.length<3) return;
+ const rot=estimateRotation(vps,canvas.width,canvas.height);
+ const refined=refinePosition(rot);
+ ctx.strokeStyle='lime'; ctx.lineWidth=2;
+ lines.forEach(l=>{ctx.beginPath();ctx.moveTo(l.x1,l.y1);ctx.lineTo(l.x2,l.y2);ctx.stroke();});
+ ctx.fillStyle='red';
+ vps.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();});
+ ctx.fillStyle='cyan';
+ buildings.slice(0,25).forEach(b=>{
+   if(!b.geometry) return;
+   const p=projectBuilding(b.geometry[0].lat,b.geometry[0].lon,rot);
+   ctx.beginPath();ctx.arc(p.x,p.y,4,0,Math.PI*2);ctx.fill();
+ });
+ statusEl.textContent=`Lat ${refined.lat.toFixed(6)} | Lon ${refined.lon.toFixed(6)} | yaw ${(rot.yaw*180/Math.PI).toFixed(1)}°`;
+}
+
+document.getElementById('startBtn').onclick=start;
+</script>
+</body>
+</html>
