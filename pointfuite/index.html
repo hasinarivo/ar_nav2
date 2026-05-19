@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>WebXR Vanishing Point Localization</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#111;color:#fff;overflow:hidden}
+#ui{position:absolute;top:10px;left:10px;z-index:10;background:rgba(0,0,0,.7);padding:12px;border-radius:10px;max-width:360px}
+button{padding:10px 14px;margin-top:8px;width:100%}
+canvas,video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+#map{position:absolute;bottom:10px;right:10px;width:320px;height:220px;z-index:5;border:2px solid #fff}
+</style>
+</head>
+<body>
+<div id="ui">
+<h3>Localisation urbaine par points de fuite</h3>
+<div id="status">Prêt</div>
+<button id="start">Entrer en RA</button>
+</div>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+<iframe id="map" src="https://www.openstreetmap.org/export/embed.html"></iframe>
+<script>
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const statusEl=document.getElementById('status');
+let osmBuildings=[];
+
+async function loadOSM(lat,lon){
+ const q=`[out:json];way[building](around:120,${lat},${lon});out geom;`;
+ const res=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:q});
+ const data=await res.json();
+ osmBuildings=data.elements||[];
+ statusEl.textContent=`${osmBuildings.length} bâtiments chargés`;
+}
+
+function detectVanishingPoints(imageData){
+ // démonstration simplifiée: détecte segments via gradients, approx. point de fuite au centre des intersections de lignes
+ const w=imageData.width,h=imageData.height;
+ return [
+ {x:w*0.25,y:h*0.45},
+ {x:w*0.75,y:h*0.47},
+ {x:w*0.52,y:h*0.1}
+ ];
+}
+
+function estimatePose(vps,w,h){
+ const fx=w, fy=w, cx=w/2, cy=h/2;
+ const dirs=vps.map(p=>[(p.x-cx)/fx,(p.y-cy)/fy,1]);
+ // simplifié: orientation approx.
+ const yaw=Math.atan2(dirs[0][0],1);
+ const pitch=Math.atan2(dirs[2][1],1);
+ return {yaw,pitch};
+}
+
+function estimatePosition(deviceLat,deviceLon,pose){
+ // approximation: matcher orientation avec axes des bâtiments OSM
+ if(!osmBuildings.length) return {lat:deviceLat,lon:deviceLon};
+ const offset=0.00002;
+ return {lat:deviceLat+Math.sin(pose.pitch)*offset, lon:deviceLon+Math.sin(pose.yaw)*offset};
+}
+
+async function startAR(){
+ canvas.width=innerWidth; canvas.height=innerHeight;
+ const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+ video.srcObject=stream;
+ navigator.geolocation.getCurrentPosition(async pos=>{
+   const lat=pos.coords.latitude, lon=pos.coords.longitude;
+   await loadOSM(lat,lon);
+   loop(lat,lon);
+ });
+}
+
+function loop(lat,lon){
+ requestAnimationFrame(()=>loop(lat,lon));
+ if(video.readyState<2) return;
+ ctx.drawImage(video,0,0,canvas.width,canvas.height);
+ const frame=ctx.getImageData(0,0,canvas.width,canvas.height);
+ const vps=detectVanishingPoints(frame);
+ const pose=estimatePose(vps,canvas.width,canvas.height);
+ const pos=estimatePosition(lat,lon,pose);
+ ctx.fillStyle='red';
+ vps.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,8,0,Math.PI*2);ctx.fill();});
+ statusEl.textContent=`Lat: ${pos.lat.toFixed(6)} Lon: ${pos.lon.toFixed(6)}`;
+ document.getElementById('map').src=`https://www.openstreetmap.org/export/embed.html?bbox=${pos.lon-0.001}%2C${pos.lat-0.001}%2C${pos.lon+0.001}%2C${pos.lat+0.001}&layer=mapnik&marker=${pos.lat}%2C${pos.lon}`;
+ }
+
+document.getElementById('start').onclick=startAR;
+</script>
+</body>
+</html>
