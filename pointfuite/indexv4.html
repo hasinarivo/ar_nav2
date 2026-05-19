@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Prototype thèse final — calibration + GeoJSON</title>
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:system-ui,sans-serif} video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover} #hud{position:absolute;top:10px;left:10px;right:10px;z-index:20;background:rgba(0,0,0,.65);color:#fff;padding:12px;border-radius:14px} button{width:100%;padding:10px;margin-top:8px} #miniMap{position:absolute;bottom:10px;right:10px;width:180px;height:180px;background:#fff;border-radius:12px;z-index:20}
+</style>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+<div id="hud"><h3>Version finale thèse</h3><div id="info">Initialisation…</div><button id="startBtn">Entrer en RA</button><button id="calibBtn">Calibration interactive</button><button id="exportBtn">Exporter GeoJSON</button></div>
+<video id="video" autoplay playsinline></video><canvas id="canvas"></canvas><canvas id="miniMap"></canvas>
+<script>
+const video=video=document.getElementById('video'); const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d'); const info=document.getElementById('info'); const mini=document.getElementById('miniMap'); const mctx=mini.getContext('2d');
+let gps=null, buildings=[], K=null, trajectory=[], calibrated=false;
+async function fetchOSM(lat,lon){ const q=`[out:json];way[building](around:150,${lat},${lon});out geom;`; const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:q}); const j=await r.json(); buildings=j.elements||[]; }
+function initK(){ const w=canvas.width,h=canvas.height; const f=Math.max(w,h)*(calibrated?1.35:1.15); K=cv.matFromArray(3,3,cv.CV_64F,[f,0,w/2,0,f,h/2,0,0,1]); }
+function detectVP(){ let src=cv.imread(canvas), g=new cv.Mat(); cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY); let e=new cv.Mat(); cv.Canny(g,e,60,160); let l=new cv.Mat(); cv.HoughLinesP(e,l,1,Math.PI/180,50,50,10); let pts=[]; for(let i=0;i<Math.min(l.rows,40);i++){ let a=l.data32S.slice(i*4,i*4+4); ctx.strokeStyle='lime'; ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(a[2],a[3]); ctx.stroke(); pts.push({x:a[2],y:a[3]}); } src.delete();g.delete();e.delete();l.delete(); return pts.slice(0,3); }
+function solve(vps){ let obj=[], img=[]; buildings.slice(0,8).forEach((b,i)=>{ if(!b.geometry) return; let p=b.geometry[0]; obj.push((p.lon-gps.lon)*111320,(p.lat-gps.lat)*110540,0); img.push(vps[i%3].x,vps[i%3].y);}); if(obj.length<12) return null; let objM=cv.matFromArray(obj.length/3,1,cv.CV_32FC3,obj); let imgM=cv.matFromArray(img.length/2,1,cv.CV_32FC2,img); let rvec=new cv.Mat(), tvec=new cv.Mat(); cv.solvePnP(objM,imgM,K,new cv.Mat(),rvec,tvec,false,cv.SOLVEPNP_ITERATIVE); return {rvec,tvec}; }
+function proj(lat,lon,pose){ let obj=cv.matFromArray(1,1,cv.CV_32FC3,[(lon-gps.lon)*111320,(lat-gps.lat)*110540,0]); let out=new cv.Mat(); cv.projectPoints(obj,pose.rvec,pose.tvec,K,new cv.Mat(),out); let p={x:out.data32F[0],y:out.data32F[1]}; obj.delete(); out.delete(); return p; }
+function drawBuildings(pose){ buildings.slice(0,15).forEach(b=>{ if(!b.geometry) return; ctx.strokeStyle='cyan'; ctx.beginPath(); b.geometry.forEach((g,i)=>{ const p=proj(g.lat,g.lon,pose); if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y); }); ctx.closePath(); ctx.stroke(); }); }
+function drawMap(lat,lon){ mctx.clearRect(0,0,180,180); mctx.fillStyle='#eee'; mctx.fillRect(0,0,180,180); mctx.fillStyle='red'; mctx.beginPath(); mctx.arc(90,90,5,0,Math.PI*2); mctx.fill(); }
+function logPos(lat,lon){ trajectory.push([lon,lat]); }
+function exportGeoJSON(){ const geo={type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'LineString',coordinates:trajectory},properties:{name:'estimated_track'}}]}; const blob=new Blob([JSON.stringify(geo,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='trajectory.geojson'; a.click(); }
+async function start(){ canvas.width=innerWidth; canvas.height=innerHeight; const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}); video.srcObject=stream; navigator.geolocation.getCurrentPosition(async p=>{ gps={lat:p.coords.latitude,lon:p.coords.longitude}; await fetchOSM(gps.lat,gps.lon); initK(); loop(); }); }
+function loop(){ requestAnimationFrame(loop); if(typeof cv==='undefined'||!cv.imread||video.readyState<2) return; ctx.drawImage(video,0,0,canvas.width,canvas.height); const vps=detectVP(); if(vps.length<3) return; vps.forEach(p=>{ctx.fillStyle='red';ctx.beginPath();ctx.arc(p.x,p.y,6,0,Math.PI*2);ctx.fill();}); const pose=solve(vps); if(!pose) return; drawBuildings(pose); const t=pose.tvec.data64F||pose.tvec.data32F; const lat=gps.lat+t[1]/110540; const lon=gps.lon+t[0]/111320; drawMap(lat,lon); logPos(lat,lon); info.textContent=`Lat ${lat.toFixed(6)} | Lon ${lon.toFixed(6)} | précision expérimentale`; }
+document.getElementById('startBtn').onclick=start; document.getElementById('calibBtn').onclick=()=>{ calibrated=true; initK(); info.textContent='Calibration interactive activée'; }; document.getElementById('exportBtn').onclick=exportGeoJSON;
+</script>
+</body></html>
