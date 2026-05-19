@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+<title>Prototype thèse — Localisation urbaine par points de fuite</title>
+<style>
+body{margin:0;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
+video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+#hud{position:absolute;top:10px;left:10px;right:10px;z-index:20;background:rgba(0,0,0,.65);color:#fff;padding:12px;border-radius:16px;backdrop-filter:blur(8px)}
+button{width:100%;padding:12px;font-size:16px;margin-top:8px}
+#miniMap{position:absolute;bottom:12px;right:12px;width:180px;height:180px;border:2px solid #fff;border-radius:12px;z-index:20;background:#fff}
+</style>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+<div id="hud">
+<h3>Prototype thèse — localisation exacte caméra</h3>
+<div id="info">Chargement des bibliothèques…</div>
+<button id="startBtn">Entrer en RA</button>
+</div>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+<canvas id="miniMap"></canvas>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const miniMap = document.getElementById('miniMap');
+const mctx = miniMap.getContext('2d');
+const info = document.getElementById('info');
+let gps=null, buildings=[], K=null, estimated=[];
+
+async function overpass(lat,lon){
+ const q=`[out:json];way[building](around:150,${lat},${lon});out geom;`;
+ const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:q});
+ const j=await r.json(); buildings=j.elements||[];
+}
+
+function initK(w,h){
+ const f = Math.max(w,h)*1.15;
+ K = cv.matFromArray(3,3,cv.CV_64F,[f,0,w/2,0,f,h/2,0,0,1]);
+}
+
+function detectVP(){
+ let src=cv.imread(canvas), gray=new cv.Mat();
+ cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+ let edges=new cv.Mat(); cv.Canny(gray,edges,50,150);
+ let lines=new cv.Mat(); cv.HoughLinesP(edges,lines,1,Math.PI/180,60,40,8);
+ const seg=[];
+ for(let i=0;i<lines.rows;i++){
+   let l=lines.data32S.slice(i*4,i*4+4);
+   seg.push({x1:l[0],y1:l[1],x2:l[2],y2:l[3]});
+   ctx.strokeStyle='lime'; ctx.beginPath(); ctx.moveTo(l[0],l[1]); ctx.lineTo(l[2],l[3]); ctx.stroke();
+ }
+ src.delete(); gray.delete(); edges.delete(); lines.delete();
+ return clusterVP(seg);
+}
+
+function inter(a,b){
+ const d=(a.x1-a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1-b.x2);
+ if(Math.abs(d)<1e-6) return null;
+ return {
+  x:((a.x1*a.y2-a.y1*a.x2)*(b.x1-b.x2)-(a.x1-a.x2)*(b.x1*b.y2-b.y1*b.x2))/d,
+  y:((a.x1*a.y2-a.y1*a.x2)*(b.y1-b.y2)-(a.y1-a.y2)*(b.x1*b.y2-b.y1*b.x2))/d
+ };
+}
+
+function clusterVP(lines){
+ let pts=[];
+ for(let i=0;i<Math.min(lines.length,50);i++) for(let j=i+1;j<Math.min(lines.length,50);j++){
+  const p=inter(lines[i],lines[j]);
+  if(p && isFinite(p.x)&&isFinite(p.y)) pts.push(p);
+ }
+ return pts.slice(0,3);
+}
+
+function solve(vps){
+ let obj=[], img=[];
+ buildings.slice(0,8).forEach((b,i)=>{
+  if(!b.geometry) return;
+  const p=b.geometry[0];
+  obj.push((p.lon-gps.lon)*111320,(p.lat-gps.lat)*110540,0);
+  img.push(vps[i%3].x,vps[i%3].y);
+ });
+ if(obj.length<12) return null;
+ const objMat=cv.matFromArray(obj.length/3,1,cv.CV_32FC3,obj);
+ const imgMat=cv.matFromArray(img.length/2,1,cv.CV_32FC2,img);
+ const rvec=new cv.Mat(), tvec=new cv.Mat();
+ cv.solvePnP(objMat,imgMat,K,new cv.Mat(),rvec,tvec,false,cv.SOLVEPNP_ITERATIVE);
+ return {rvec,tvec};
+}
+
+function drawBuildings(pose){
+ buildings.slice(0,15).forEach(b=>{
+  if(!b.geometry || b.geometry.length<2) return;
+  ctx.strokeStyle='cyan'; ctx.beginPath();
+  b.geometry.forEach((g,idx)=>{
+    const pt = project(g.lat,g.lon,pose);
+    if(!pt) return;
+    if(idx===0) ctx.moveTo(pt.x,pt.y); else ctx.lineTo(pt.x,pt.y);
+  });
+  ctx.closePath(); ctx.stroke();
+ });
+}
+
+function project(lat,lon,pose){
+ const obj=cv.matFromArray(1,1,cv.CV_32FC3,[(lon-gps.lon)*111320,(lat-gps.lat)*110540,0]);
+ const imgPts=new cv.Mat();
+ cv.projectPoints(obj,pose.rvec,pose.tvec,K,new cv.Mat(),imgPts);
+ const x=imgPts.data32F[0], y=imgPts.data32F[1];
+ obj.delete(); imgPts.delete();
+ if(!isFinite(x)||!isFinite(y)) return null;
+ return {x,y};
+}
+
+function drawMiniMap(lat,lon){
+ mctx.clearRect(0,0,180,180);
+ mctx.fillStyle='#f5f5f5'; mctx.fillRect(0,0,180,180);
+ mctx.fillStyle='red'; mctx.beginPath(); mctx.arc(90,90,6,0,Math.PI*2); mctx.fill();
+ mctx.fillStyle='black'; mctx.font='12px sans-serif';
+ mctx.fillText(lat.toFixed(6),10,20); mctx.fillText(lon.toFixed(6),10,38);
+}
+
+function exportLog(lat,lon){
+ estimated.push({t:Date.now(),lat,lon});
+ localStorage.setItem('trajectory', JSON.stringify(estimated));
+}
+
+async function start(){
+ canvas.width=innerWidth; canvas.height=innerHeight;
+ const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+ video.srcObject=stream;
+ navigator.geolocation.getCurrentPosition(async p=>{
+  gps={lat:p.coords.latitude, lon:p.coords.longitude};
+  await overpass(gps.lat,gps.lon);
+  initK(canvas.width,canvas.height);
+  loop();
+ });
+}
+
+function loop(){
+ requestAnimationFrame(loop);
+ if(typeof cv==='undefined' || !cv.imread || video.readyState<2) return;
+ ctx.drawImage(video,0,0,canvas.width,canvas.height);
+ const vps=detectVP();
+ if(vps.length<3) return;
+ vps.forEach(p=>{ctx.fillStyle='red';ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();});
+ const pose=solve(vps);
+ if(!pose) return;
+ drawBuildings(pose);
+ const t=pose.tvec.data64F || pose.tvec.data32F;
+ const lat=gps.lat + t[1]/110540;
+ const lon=gps.lon + t[0]/111320;
+ drawMiniMap(lat,lon);
+ exportLog(lat,lon);
+ info.textContent=`Lat ${lat.toFixed(6)} | Lon ${lon.toFixed(6)} | Z ${t[2].toFixed(2)}m`;
+}
+
+document.getElementById('startBtn').onclick=start;
+</script>
+</body>
+</html>
