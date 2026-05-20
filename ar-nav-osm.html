@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AR.NAV — Navigation Urbaine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+
+<style>
+/* ═══════════════════════════════════════
+   DESIGN TOKENS (matches urban_localizer)
+═══════════════════════════════════════ */
+:root {
+  --bg:        #080A0E;
+  --surface:   #0D1018;
+  --panel:     #111620;
+  --border:    rgba(255,255,255,0.06);
+  --border2:   rgba(255,255,255,0.12);
+
+  --teal:      #00FFB2;
+  --teal-dim:  rgba(0,255,178,0.10);
+  --teal-glow: rgba(0,255,178,0.22);
+  --amber:     #FFB300;
+  --amber-dim: rgba(255,179,0,0.10);
+  --red:       #FF3B3B;
+  --blue:      #4FC3F7;
+  --purple:    #B388FF;
+
+  --text:      #D8DDE8;
+  --muted:     #4A5166;
+  --dim:       #1E2432;
+
+  --mono:      'Share Tech Mono', monospace;
+  --cond:      'Barlow Condensed', sans-serif;
+  --r:         4px;
+  --r2:        8px;
+
+  /* Layout zones */
+  --header-h:  44px;
+  --sheet-collapsed: 48px;   /* just the handle + tab strip */
+  --sheet-expanded:  clamp(200px, 40dvh, 280px);
+}
+
+/* ═══════════════════════════════════════
+   BASE
+═══════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--mono); }
+button { font-family: var(--mono); cursor: pointer; border: none; outline: none; }
+input { font-family: var(--mono); border: none; outline: none; }
+
+/* Scan-line aesthetic overlay */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0px, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+  pointer-events: none;
+  z-index: 9000;
+}
+
+/* ═══════════════════════════════════════
+   MAIN LAYOUT — Stack: header / camera / sheet
+═══════════════════════════════════════ */
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* ── HEADER ── */
+#header {
+  flex-shrink: 0;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  z-index: 200;
+}
+.logo {
+  font-family: var(--cond);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--teal);
+  text-shadow: 0 0 16px var(--teal-glow);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.logo span { color: var(--muted); }
+
+#status-text {
+  flex: 1;
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#gps-coords {
+  font-size: 9px;
+  color: var(--teal);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#building-count-ar {
+  font-size: 9px;
+  color: var(--amber);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── VIEWPORT ZONE — fills remaining space above sheet ── */
+#viewport-zone {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+  min-height: 0;
+}
+
+/* WebGL canvas — always fills the zone */
+#webgl-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* AR entry button — centered in viewport */
+#ar-entry-btn {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  background: var(--teal);
+  color: var(--bg);
+  font-family: var(--cond);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  padding: 10px 24px;
+  border-radius: var(--r);
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+/* Reticle crosshair */
+#reticle {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 48px; height: 48px;
+  pointer-events: none;
+  z-index: 10;
+}
+#reticle::before, #reticle::after {
+  content: '';
+  position: absolute;
+  border-color: var(--teal);
+  border-style: solid;
+  width: 14px; height: 14px;
+  opacity: 0.7;
+}
+#reticle::before { top:0;left:0; border-width:1.5px 0 0 1.5px; }
+#reticle::after  { bottom:0;right:0; border-width:0 1.5px 1.5px 0; }
+.rc-tr { position:absolute; top:0; right:0; width:14px; height:14px; border:solid var(--teal); border-width:1.5px 1.5px 0 0; opacity:0.7; }
+.rc-bl { position:absolute; bottom:0; left:0;  width:14px; height:14px; border:solid var(--teal); border-width:0 0 1.5px 1.5px; opacity:0.7; }
+.rc-dot { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:4px; height:4px; background:var(--teal); border-radius:50%; box-shadow:0 0 8px var(--teal); }
+
+/* ── OSM MAP — top-right overlay in viewport ── */
+#osm-map-container {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 140px;
+  height: 140px;
+  border-radius: var(--r2);
+  overflow: hidden;
+  border: 1px solid rgba(0,255,178,0.3);
+  z-index: 30;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  transition: all 0.3s ease;
+}
+#osm-map-container.hidden {
+  width: 0; height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+#osm-map { width: 100%; height: 100%; }
+
+/* Map toggle button */
+#btn-map-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 40;
+  width: 28px; height: 28px;
+  border-radius: var(--r);
+  background: rgba(13,16,24,0.9);
+  border: 1px solid var(--border2);
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+#btn-map-toggle:active { background: var(--dim); color: var(--teal); }
+/* Shown only when map is hidden */
+#btn-map-toggle.map-shown { display: none; }
+
+/* Map label overlay */
+.map-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  font-size: 8px;
+  color: var(--teal);
+  letter-spacing: 0.08em;
+  text-align: center;
+  background: rgba(8,10,14,0.8);
+  padding: 2px 0;
+  pointer-events: none;
+  z-index: 31;
+}
+
+/* Calibration orientation badge — bottom-left of viewport */
+#orient-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 30;
+  background: rgba(8,10,14,0.88);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 5px 8px;
+  font-size: 8px;
+  color: var(--muted);
+  line-height: 1.7;
+  pointer-events: none;
+}
+#orient-badge .hi { color: var(--teal); }
+
+/* ── BOTTOM SHEET ── */
+#bottom-sheet {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Height controlled by JS / CSS custom property */
+  height: var(--sheet-expanded);
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#bottom-sheet.collapsed {
+  height: var(--sheet-collapsed);
+}
+
+/* Handle */
+#sheet-handle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  cursor: pointer;
+  gap: 8px;
+}
+.handle-bar { width: 32px; height: 3px; background: var(--dim); border-radius: 2px; }
+#sheet-chevron { font-size: 8px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; transition: transform 0.3s; }
+#bottom-sheet.collapsed #sheet-chevron { transform: rotate(180deg); }
+
+/* Tab strip */
+#tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  height: 28px;
+}
+.tab-btn {
+  flex: 1;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  padding: 0 2px;
+}
+.tab-btn:last-child { border-right: none; }
+.tab-btn.active { color: var(--teal); border-bottom-color: var(--teal); background: var(--teal-dim); }
+
+/* Panel content */
+#panel-wrap {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 12px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+#panel-wrap::-webkit-scrollbar { width: 2px; }
+#panel-wrap::-webkit-scrollbar-thumb { background: var(--dim); }
+
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* ═══════════════════════════════════════
+   PANEL COMPONENTS
+═══════════════════════════════════════ */
+
+/* Section label */
+.s-label {
+  font-size: 8px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 8px 0 5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.s-label::before { content:''; display:block; width:2px; height:8px; background:var(--teal); border-radius:1px; flex-shrink:0; }
+.s-label.amber::before { background: var(--amber); }
+
+/* Pose cards */
+.pose-grid {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.pose-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px 8px;
+}
+.pc-lbl { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.pc-val { font-size: 14px; color: var(--teal); margin-top: 1px; }
+
+/* Slider rows */
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.ctrl-row:last-child { margin-bottom: 0; }
+.ctrl-lbl { font-size: 9px; color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctrl-val { font-size: 9px; color: var(--teal); min-width: 32px; text-align: right; flex-shrink: 0; }
+
+input[type=range] {
+  -webkit-appearance: none;
+  width: 90px;
+  height: 2px;
+  background: var(--dim);
+  border-radius: 1px;
+  outline: none;
+  flex-shrink: 0;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--teal);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+input[type=range].amber::-webkit-slider-thumb { background: var(--amber); }
+
+/* Checkbox styled */
+.chk-row { display: flex; align-items: center; gap: 8px; }
+.chk-row label { font-size: 9px; color: var(--muted); flex: 1; }
+input[type=checkbox] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px; height: 16px;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  background: var(--panel);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+input[type=checkbox]:checked {
+  background: var(--teal-dim);
+  border-color: rgba(0,255,178,0.5);
+}
+input[type=checkbox]:checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  font-size: 10px;
+  color: var(--teal);
+}
+
+/* Button strip */
+.btn-row { display: flex; gap: 5px; flex-wrap: wrap; margin: 6px 0; }
+.btn {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: var(--r);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--teal); color: var(--bg); font-weight: 700; }
+.btn-primary:active { opacity: 0.8; }
+.btn-secondary { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.btn-secondary:active { background: var(--dim); color: var(--text); }
+.btn-amber { background: var(--amber-dim); color: var(--amber); border: 1px solid rgba(255,179,0,0.3); }
+.btn-amber:active { opacity: 0.8; }
+
+/* Orient display in calibration */
+.orient-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 6px 0;
+}
+.og-cell {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 5px 7px;
+}
+.og-lbl { font-size: 8px; color: var(--muted); }
+.og-val { font-size: 13px; color: var(--teal); margin-top: 1px; }
+
+/* ═══════════════════════════════════════
+   TOAST
+═══════════════════════════════════════ */
+#toast {
+  position: fixed;
+  bottom: calc(var(--sheet-expanded) + 12px);
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  padding: 7px 14px;
+  font-size: 10px;
+  color: var(--teal);
+  z-index: 9990;
+  opacity: 0;
+  transition: all 0.3s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Leaflet overrides */
+.leaflet-container { background: var(--bg) !important; }
+.leaflet-control-attribution { display: none !important; }
+</style>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- ─── HEADER ─────────────────────────────── -->
+  <div id="header">
+    <div class="logo">AR<span>.</span>NAV</div>
+    <span id="status-text">Initialisation…</span>
+    <span id="gps-coords">--° --°</span>
+    <span id="building-count-ar">🏢 0</span>
+  </div>
+
+  <!-- ─── VIEWPORT ──────────────────────────── -->
+  <div id="viewport-zone">
+
+    <!-- WebGL renders here (Three.js appends canvas) -->
+    <div id="webgl-canvas"></div>
+
+    <!-- Reticle -->
+    <div id="reticle">
+      <div class="rc-tr"></div>
+      <div class="rc-bl"></div>
+      <div class="rc-dot"></div>
+    </div>
+
+    <!-- OSM Map overlay -->
+    <div id="osm-map-container">
+      <div id="osm-map"></div>
+      <div class="map-label">OSM · TOP VIEW</div>
+    </div>
+
+    <!-- Map toggle button (visible only when map hidden) -->
+    <button id="btn-map-toggle" class="map-shown" onclick="toggleMapOverlay()" title="Afficher la carte">🗺</button>
+
+    <!-- Orientation badge (bottom-left of viewport) -->
+    <div id="orient-badge">
+      COMPASS <span class="hi" id="ob-compass">--°</span><br>
+      α <span class="hi" id="ob-alpha">--°</span>
+      β <span class="hi" id="ob-beta">--°</span>
+      γ <span class="hi" id="ob-gamma">--°</span>
+    </div>
+
+    <!-- AR Entry button -->
+    <button id="ar-entry-btn">▶ ENTRER EN AR</button>
+
+  </div><!-- /viewport-zone -->
+
+  <!-- ─── BOTTOM SHEET ───────────────────────── -->
+  <div id="bottom-sheet">
+
+    <!-- Handle -->
+    <div id="sheet-handle" onclick="toggleSheet()">
+      <div class="handle-bar"></div>
+      <span id="sheet-chevron">▼ AJUSTEMENTS</span>
+    </div>
+
+    <!-- Tabs -->
+    <div id="tabs">
+      <button class="tab-btn active" onclick="switchTab('pos', this)">POSITION</button>
+      <button class="tab-btn" onclick="switchTab('build', this)">BÂTIMENTS</button>
+      <button class="tab-btn" onclick="switchTab('calib', this)">CALIBRATION</button>
+      <button class="tab-btn" onclick="switchTab('nav', this)">NAV</button>
+    </div>
+
+    <!-- Panel content -->
+    <div id="panel-wrap">
+
+      <!-- ── POSITION tab ── -->
+      <div class="panel active" id="tab-pos">
+        <div class="pose-grid">
+          <div class="pose-card"><div class="pc-lbl">LAT</div><div class="pc-val" id="p-lat">--</div></div>
+          <div class="pose-card"><div class="pc-lbl">LON</div><div class="pc-val" id="p-lon">--</div></div>
+          <div class="pose-card"><div class="pc-lbl">CAP</div><div class="pc-val" id="p-cap">--°</div></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="loadOSMBuildings()">↺ RECHARGER OSM</button>
+          <button class="btn btn-secondary" onclick="clearAll()">✕ EFFACER</button>
+        </div>
+      </div>
+
+      <!-- ── BÂTIMENTS tab ── -->
+      <div class="panel" id="tab-build">
+        <div class="s-label">Échelle & position</div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Échelle XY</span>
+          <input type="range" id="ar-scaleXY" min="0.3" max="2.5" step="0.01" value="1.0">
+          <span class="ctrl-val" id="ar-scaleXY-val">1.00</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Hauteur (Y)</span>
+          <input type="range" id="ar-scaleY" min="0.2" max="3.0" step="0.01" value="1.0">
+          <span class="ctrl-val" id="ar-scaleY-val">1.00</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Rotation Y</span>
+          <input type="range" id="ar-rotation" min="-180" max="180" step="1" value="0">
+          <span class="ctrl-val" id="ar-rotation-val">0°</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Décalage X</span>
+          <input type="range" id="ar-offsetX" min="-20" max="20" step="0.5" value="0">
+          <span class="ctrl-val" id="ar-offsetX-val">0.0</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Décalage Z</span>
+          <input type="range" id="ar-offsetZ" min="-20" max="20" step="0.5" value="0">
+          <span class="ctrl-val" id="ar-offsetZ-val">0.0</span>
+        </div>
+
+        <div class="s-label amber">Sol & apparence</div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Inclinaison sol</span>
+          <input type="range" class="amber" id="ar-ground-tilt" min="-45" max="45" step="1" value="0">
+          <span class="ctrl-val" id="ar-ground-tilt-val">0°</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Opacité</span>
+          <input type="range" id="ar-opacity" min="0.3" max="1.0" step="0.01" value="0.75">
+          <span class="ctrl-val" id="ar-opacity-val">75%</span>
+        </div>
+        <div class="ctrl-row chk-row" style="margin-bottom:5px;">
+          <label>Fil de fer</label>
+          <input type="checkbox" id="ar-wireframe">
+        </div>
+        <div class="ctrl-row chk-row">
+          <label>Bâtiments suivent le sol</label>
+          <input type="checkbox" id="ar-tilt-buildings" checked>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="resetParams()">↺ RESET</button>
+        </div>
+      </div>
+
+      <!-- ── CALIBRATION tab ── -->
+      <div class="panel" id="tab-calib">
+        <div class="s-label">Orientation capteur</div>
+        <div class="orient-grid">
+          <div class="og-cell"><div class="og-lbl">Compass</div><div class="og-val" id="oc-compass">--°</div></div>
+          <div class="og-cell"><div class="og-lbl">Alpha α</div><div class="og-val" id="oc-alpha">--°</div></div>
+          <div class="og-cell"><div class="og-lbl">Beta β</div><div class="og-val" id="oc-beta">--°</div></div>
+          <div class="og-cell"><div class="og-lbl">Gamma γ</div><div class="og-val" id="oc-gamma">--°</div></div>
+        </div>
+
+        <div class="s-label">Correction heading</div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Heading offset</span>
+          <input type="range" id="ar-heading-adjustment" min="-180" max="180" step="1" value="0">
+          <span class="ctrl-val" id="ar-heading-adjustment-val">0°</span>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="calibrateCamera()">🎯 CALIBRER NORD</button>
+          <button class="btn btn-secondary" onclick="alignNorth()">🧭 ALIGNER NORD</button>
+        </div>
+        <div class="s-label" style="margin-top:6px;">Instructions</div>
+        <div style="font-size:9px;color:var(--muted);line-height:1.7;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;">
+          Orientez le téléphone vers le <span style="color:var(--teal)">NORD</span> avec la caméra pointée vers le sol, puis appuyez sur <span style="color:var(--teal)">CALIBRER NORD</span>.
+        </div>
+      </div>
+
+      <!-- ── NAVIGATION tab ── -->
+      <div class="panel" id="tab-nav">
+        <div class="s-label">Destination</div>
+        <div class="btn-row">
+          <button class="btn btn-amber" onclick="setDestination()">🎯 DÉFINIR DEST.</button>
+          <button class="btn btn-secondary" onclick="clearArrows()">✕ EFFACER FLÈCHES</button>
+        </div>
+        <div style="font-size:9px;color:var(--muted);margin-top:8px;line-height:1.7;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;">
+          Cap destination : <span style="color:var(--amber)" id="nav-bearing">--°</span><br>
+          Distance : <span style="color:var(--amber)" id="nav-dist">--m</span>
+        </div>
+      </div>
+
+    </div><!-- /panel-wrap -->
+  </div><!-- /bottom-sheet -->
+
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<!-- THREE.JS + LEAFLET -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════ */
+let scene, camera, renderer, xrSession = null;
+let currentPosition = { lat: -18.8792, lon: 47.5079 };
+let destination = null;
+let navigationArrows = [];
+let osmMeshes = [];
+let buildingLabels = [];
+
+let osmMap = null;
+let userMarker = null;
+let userHeadingPolyline = null;
+let buildingMarkers = [];
+
+let deviceOrientation = { alpha: 0, beta: 0, gamma: 0, compass: 0 };
+let calibrationOffset = 0;
+
+let groundGroup, buildingsGroup;
+
+let displayParams = {
+  scaleXY: 1.0, scaleY: 1.0,
+  rotation: 0, offsetX: 0, offsetZ: 0,
+  opacity: 0.75, wireframe: false,
+  groundTilt: 0, tiltBuildings: true,
+  cameraBearing: 0
+};
+
+let sheetExpanded = true;
+let mapVisible = true;
+let lastPosition = null;
+
+/* ═══════════════════════════════════════════════════════
+   SHEET TOGGLE
+═══════════════════════════════════════════════════════ */
+function toggleSheet() {
+  sheetExpanded = !sheetExpanded;
+  const sheet = document.getElementById('bottom-sheet');
+  sheet.classList.toggle('collapsed', !sheetExpanded);
+}
+
+/* ═══════════════════════════════════════════════════════
+   MAP TOGGLE
+═══════════════════════════════════════════════════════ */
+function toggleMapOverlay() {
+  mapVisible = !mapVisible;
+  const mapEl = document.getElementById('osm-map-container');
+  const btn   = document.getElementById('btn-map-toggle');
+  mapEl.classList.toggle('hidden', !mapVisible);
+  btn.classList.toggle('map-shown', mapVisible);
+  if (mapVisible && osmMap) setTimeout(() => osmMap.invalidateSize(), 350);
+}
+
+/* ═══════════════════════════════════════════════════════
+   TABS
+═══════════════════════════════════════════════════════ */
+function switchTab(name, el) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+  // Auto-expand if collapsed
+  if (!sheetExpanded) toggleSheet();
+}
+
+/* ═══════════════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════════════ */
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function updateStatus(text) {
+  document.getElementById('status-text').textContent = text;
+}
+
+/* ═══════════════════════════════════════════════════════
+   THREE.JS INIT
+═══════════════════════════════════════════════════════ */
+async function init() {
+  scene  = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, 1, 0.01, 300);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.xr.enabled = true;
+
+  // Mount into the zone div — fills it via CSS
+  const zone = document.getElementById('webgl-canvas');
+  zone.style.position = 'absolute';
+  zone.style.inset = '0';
+  zone.style.overflow = 'hidden';
+  renderer.domElement.style.width  = '100%';
+  renderer.domElement.style.height = '100%';
+  renderer.domElement.style.display = 'block';
+  zone.appendChild(renderer.domElement);
+
+  // Groups
+  groundGroup   = new THREE.Group();
+  buildingsGroup = new THREE.Group();
+  groundGroup.add(buildingsGroup);
+  scene.add(groundGroup);
+
+  // Grid & ground plane
+  const grid = new THREE.GridHelper(100, 20, 0x00FFB2, 0x1E2432);
+  grid.position.y = -1;
+  groundGroup.add(grid);
+
+  const groundPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(80, 80),
+    new THREE.MeshPhongMaterial({ color: 0x0D1018, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
+  );
+  groundPlane.rotation.x = -Math.PI / 2;
+  groundPlane.position.y = -1;
+  groundGroup.add(groundPlane);
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0x404060));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8888ff, 1.2));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  dir.position.set(10, 20, 5);
+  scene.add(dir);
+
+  // Resize handling
+  resizeRenderer();
+  window.addEventListener('resize', resizeRenderer);
+
+  // Sub-systems
+  initOSMMap();
+  initDeviceOrientation();
+  setupARButton();
+  setupControls();
+  getCurrentPosition();
+  applyGroundTilt();
+
+  renderer.setAnimationLoop(animate);
+  updateStatus('Prêt — chargement OSM…');
+  setTimeout(() => loadOSMBuildings(), 1500);
+}
+
+function resizeRenderer() {
+  const zone = document.getElementById('webgl-canvas');
+  const w = zone.clientWidth  || window.innerWidth;
+  const h = zone.clientHeight || window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function animate() {
+  renderer.render(scene, camera);
+}
+
+/* ═══════════════════════════════════════════════════════
+   OSM MAP (Leaflet)
+═══════════════════════════════════════════════════════ */
+function initOSMMap() {
+  osmMap = L.map('osm-map', {
+    center: [currentPosition.lat, currentPosition.lon],
+    zoom: 17,
+    dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, boxZoom: false,
+    keyboard: false, tap: false, touchZoom: false, zoomControl: false
+  });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, minZoom: 15
+  }).addTo(osmMap);
+
+  userMarker = L.circleMarker([currentPosition.lat, currentPosition.lon], {
+    radius: 6, fillColor: '#00FFB2', color: '#080A0E',
+    weight: 2, opacity: 1, fillOpacity: 0.9
+  }).addTo(osmMap);
+
+  userHeadingPolyline = L.polyline(
+    [[currentPosition.lat, currentPosition.lon], [currentPosition.lat + 0.0004, currentPosition.lon]],
+    { color: '#FFB300', weight: 2, opacity: 0.8 }
+  ).addTo(osmMap);
+}
+
+function updateMapView() {
+  if (!osmMap || !userMarker) return;
+  osmMap.setView([currentPosition.lat, currentPosition.lon], 17);
+  userMarker.setLatLng([currentPosition.lat, currentPosition.lon]);
+
+  const bearing = deviceOrientation.compass;
+  const rad = bearing * Math.PI / 180;
+  const off = 0.0005;
+  userHeadingPolyline.setLatLngs([
+    [currentPosition.lat, currentPosition.lon],
+    [currentPosition.lat + Math.cos(rad) * off, currentPosition.lon + Math.sin(rad) * off]
+  ]);
+
+  document.getElementById('gps-coords').textContent =
+    currentPosition.lat.toFixed(4) + '° ' + currentPosition.lon.toFixed(4) + '°';
+  document.getElementById('p-lat').textContent = currentPosition.lat.toFixed(5);
+  document.getElementById('p-lon').textContent = currentPosition.lon.toFixed(5);
+}
+
+/* ═══════════════════════════════════════════════════════
+   DEVICE ORIENTATION
+═══════════════════════════════════════════════════════ */
+function initDeviceOrientation() {
+  const attach = () => window.addEventListener('deviceorientation', handleDeviceOrientation);
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission()
+      .then(s => { if (s === 'granted') { attach(); updateStatus('Capteur activé'); } })
+      .catch(console.error);
+  } else {
+    attach();
+  }
+}
+
+function handleDeviceOrientation(e) {
+  deviceOrientation.alpha = e.alpha || 0;
+  deviceOrientation.beta  = e.beta  || 0;
+  deviceOrientation.gamma = e.gamma || 0;
+
+  let compass = 360 - deviceOrientation.alpha;
+  if (compass >= 360) compass -= 360;
+  deviceOrientation.compass = (compass + calibrationOffset + 360) % 360;
+
+  updateOrientationDisplay();
+  updateBuildingsOrientation();
+  updateMapView();
+}
+
+function updateOrientationDisplay() {
+  const c = deviceOrientation.compass.toFixed(0);
+  const a = deviceOrientation.alpha.toFixed(0);
+  const b = deviceOrientation.beta.toFixed(0);
+  const g = deviceOrientation.gamma.toFixed(0);
+
+  // Badge in viewport
+  document.getElementById('ob-compass').textContent = c + '°';
+  document.getElementById('ob-alpha').textContent   = a + '°';
+  document.getElementById('ob-beta').textContent    = b + '°';
+  document.getElementById('ob-gamma').textContent   = g + '°';
+
+  // Calibration tab
+  document.getElementById('oc-compass').textContent = c + '°';
+  document.getElementById('oc-alpha').textContent   = a + '°';
+  document.getElementById('oc-beta').textContent    = b + '°';
+  document.getElementById('oc-gamma').textContent   = g + '°';
+
+  document.getElementById('p-cap').textContent = c + '°';
+}
+
+function calibrateCamera() {
+  calibrationOffset = -deviceOrientation.alpha;
+  displayParams.cameraBearing = 0;
+  showToast('Calibré — pointez vers le Nord');
+  updateStatus('Caméra calibrée');
+}
+
+function alignNorth() {
+  displayParams.cameraBearing = 0;
+  document.getElementById('ar-heading-adjustment').value = 0;
+  document.getElementById('ar-heading-adjustment-val').textContent = '0°';
+  updateBuildingsOrientation();
+  applyBuildingAdjustments();
+  showToast('Alignement Nord appliqué');
+}
+
+/* ═══════════════════════════════════════════════════════
+   GPS
+═══════════════════════════════════════════════════════ */
+function getCurrentPosition() {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.watchPosition(pos => {
+    currentPosition = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    if (lastPosition && distance(lastPosition, currentPosition) > 30) loadOSMBuildings();
+    lastPosition = { ...currentPosition };
+    updateMapView();
+  }, null, { enableHighAccuracy: true });
+}
+
+function distance(p1, p2) {
+  const R = 6371000;
+  const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+  const dLon = (p2.lon - p1.lon) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+    Math.cos(p1.lat*Math.PI/180) * Math.cos(p2.lat*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/* ═══════════════════════════════════════════════════════
+   OSM BUILDINGS
+═══════════════════════════════════════════════════════ */
+function projectLatLon(lat, lon) {
+  const scale = 111300;
+  const x = (lon - currentPosition.lon) * scale * Math.cos(currentPosition.lat * Math.PI / 180);
+  const z = (currentPosition.lat - lat) * scale;
+  const bearing = deviceOrientation.compass * Math.PI / 180;
+  return new THREE.Vector2(
+    x * Math.cos(bearing) - z * Math.sin(bearing),
+    x * Math.sin(bearing) + z * Math.cos(bearing)
+  );
+}
+
+async function loadOSMBuildings() {
+  updateStatus('Chargement OSM…');
+  const r = 0.001;
+  const query = `[out:json];(way["building"](${currentPosition.lat-r},${currentPosition.lon-r},${currentPosition.lat+r},${currentPosition.lon+r}););out body geom;`;
+
+  try {
+    const res  = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+    const data = await res.json();
+
+    // Clear old
+    while (buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]);
+    osmMeshes = []; buildingLabels = [];
+    buildingMarkers.forEach(m => osmMap && osmMap.removeLayer(m));
+    buildingMarkers = [];
+
+    data.elements.forEach(bld => {
+      if (!bld.geometry || bld.geometry.length < 3) return;
+      const pts = bld.geometry.map(p => projectLatLon(p.lat, p.lon));
+      if (pts.length < 3) return;
+
+      try {
+        const shape  = new THREE.Shape(pts);
+        let height   = bld.tags?.height ? Math.min(Math.max(parseFloat(bld.tags.height), 3), 30) : 8;
+        const colors = { commercial: 0xFFB300, residential: 0x00FFB2, industrial: 0x4FC3F7 };
+        const color  = colors[bld.tags?.building] || 0x4488ff;
+
+        const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+        geo.computeBoundingBox();
+        const ctr = geo.boundingBox.getCenter(new THREE.Vector3());
+        geo.translate(-ctr.x, 0, -ctr.z);
+
+        const mat  = new THREE.MeshPhongMaterial({ color, transparent: true, opacity: displayParams.opacity });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.userData   = { originalPos: new THREE.Vector3(ctr.x, 0, ctr.z), originalHeight: height };
+        mesh.position.set(ctr.x, 0, ctr.z);
+        mesh.castShadow = true;
+
+        buildingsGroup.add(mesh);
+        osmMeshes.push(mesh);
+
+        // OSM map marker
+        if (bld.geometry.length > 0 && osmMap) {
+          const clat = bld.geometry.reduce((a,b)=>a+b.lat,0)/bld.geometry.length;
+          const clon = bld.geometry.reduce((a,b)=>a+b.lon,0)/bld.geometry.length;
+          const mk = L.circleMarker([clat,clon], {
+            radius:4, fillColor:'#FFB300', color:'#000', weight:1, opacity:0.7, fillOpacity:0.7
+          }).addTo(osmMap);
+          buildingMarkers.push(mk);
+        }
+
+        // Label
+        if (bld.tags?.name) {
+          const lbl = createBuildingLabel(bld.tags.name, mesh.position, height);
+          if (lbl) { buildingsGroup.add(lbl); buildingLabels.push(lbl); }
+        }
+      } catch (e) { /* skip bad geometry */ }
+    });
+
+    applyBuildingAdjustments();
+    document.getElementById('building-count-ar').textContent = '🏢 ' + osmMeshes.length;
+    updateStatus(`${osmMeshes.length} bâtiments chargés`);
+    showToast(osmMeshes.length + ' bâtiments OSM chargés');
+  } catch (e) {
+    updateStatus('Erreur chargement OSM');
+    showToast('Erreur réseau OSM');
+  }
+}
+
+function createBuildingLabel(text, position, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,255,178,0.15)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#00FFB2';
+  ctx.font = 'bold 38px Share Tech Mono, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, canvas.width / 2, 75);
+  const mat    = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(8, 2, 1);
+  sprite.position.set(position.x, height / 2, position.z);
+  return sprite;
+}
+
+/* ═══════════════════════════════════════════════════════
+   BUILDING ADJUSTMENTS
+═══════════════════════════════════════════════════════ */
+function applyGroundTilt() {
+  if (groundGroup) groundGroup.rotation.x = displayParams.groundTilt * Math.PI / 180;
+}
+
+function updateBuildingsOrientation() {
+  if (buildingsGroup) buildingsGroup.rotation.y = -displayParams.cameraBearing * Math.PI / 180;
+}
+
+function applyBuildingAdjustments() {
+  osmMeshes.forEach(mesh => {
+    const orig = mesh.userData.originalPos;
+    if (!orig) return;
+    mesh.scale.set(displayParams.scaleXY, displayParams.scaleY, displayParams.scaleXY);
+    mesh.rotation.set(-Math.PI / 2, displayParams.rotation * Math.PI / 180, 0);
+    mesh.position.x = orig.x * displayParams.scaleXY + displayParams.offsetX;
+    mesh.position.z = orig.z * displayParams.scaleXY + displayParams.offsetZ;
+    mesh.position.y = 0;
+    if (mesh.material) {
+      mesh.material.opacity   = displayParams.opacity;
+      mesh.material.wireframe = displayParams.wireframe;
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════
+   CONTROLS SETUP
+═══════════════════════════════════════════════════════ */
+function setupControls() {
+  function slider(id, valId, parse, update) {
+    const el = document.getElementById(id);
+    const vl = document.getElementById(valId);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const v = parse(el.value);
+      if (vl) vl.textContent = typeof v === 'number' ? v : v;
+      update(v);
+    });
+  }
+
+  slider('ar-scaleXY', 'ar-scaleXY-val',
+    v => parseFloat(v).toFixed(2),
+    v => { displayParams.scaleXY = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-scaleY', 'ar-scaleY-val',
+    v => parseFloat(v).toFixed(2),
+    v => { displayParams.scaleY = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-rotation', 'ar-rotation-val',
+    v => v + '°',
+    v => { displayParams.rotation = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-offsetX', 'ar-offsetX-val',
+    v => parseFloat(v).toFixed(1),
+    v => { displayParams.offsetX = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-offsetZ', 'ar-offsetZ-val',
+    v => parseFloat(v).toFixed(1),
+    v => { displayParams.offsetZ = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-ground-tilt', 'ar-ground-tilt-val',
+    v => v + '°',
+    v => { displayParams.groundTilt = parseFloat(v); applyGroundTilt(); applyBuildingAdjustments(); });
+
+  slider('ar-opacity', 'ar-opacity-val',
+    v => Math.round(parseFloat(v)*100) + '%',
+    v => { displayParams.opacity = parseFloat(v); applyBuildingAdjustments(); });
+
+  slider('ar-heading-adjustment', 'ar-heading-adjustment-val',
+    v => v + '°',
+    v => { displayParams.cameraBearing = parseFloat(v); updateBuildingsOrientation(); applyBuildingAdjustments(); });
+
+  document.getElementById('ar-wireframe').addEventListener('change', e => {
+    displayParams.wireframe = e.target.checked;
+    applyBuildingAdjustments();
+  });
+
+  document.getElementById('ar-tilt-buildings').addEventListener('change', e => {
+    displayParams.tiltBuildings = e.target.checked;
+  });
+}
+
+function resetParams() {
+  displayParams = {
+    scaleXY: 1.0, scaleY: 1.0, rotation: 0, offsetX: 0, offsetZ: 0,
+    opacity: 0.75, wireframe: false, groundTilt: 0, tiltBuildings: true, cameraBearing: 0
+  };
+  [['ar-scaleXY','1'], ['ar-scaleY','1'], ['ar-rotation','0'],
+   ['ar-offsetX','0'], ['ar-offsetZ','0'], ['ar-opacity','0.75'],
+   ['ar-ground-tilt','0'], ['ar-heading-adjustment','0']].forEach(([id,v]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v;
+  });
+  [['ar-scaleXY-val','1.00'], ['ar-scaleY-val','1.00'], ['ar-rotation-val','0°'],
+   ['ar-offsetX-val','0.0'], ['ar-offsetZ-val','0.0'], ['ar-opacity-val','75%'],
+   ['ar-ground-tilt-val','0°'], ['ar-heading-adjustment-val','0°']].forEach(([id,v]) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  });
+  document.getElementById('ar-wireframe').checked = false;
+  document.getElementById('ar-tilt-buildings').checked = true;
+  applyGroundTilt();
+  applyBuildingAdjustments();
+  showToast('Paramètres réinitialisés');
+}
+
+function clearAll() {
+  while (buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]);
+  osmMeshes = []; buildingLabels = [];
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+  document.getElementById('building-count-ar').textContent = '🏢 0';
+  showToast('Tout effacé');
+}
+
+/* ═══════════════════════════════════════════════════════
+   AR SESSION
+═══════════════════════════════════════════════════════ */
+function setupARButton() {
+  document.getElementById('ar-entry-btn').onclick = async () => {
+    if (!navigator.xr) {
+      showToast('WebXR non supporté — mode simulation');
+      return;
+    }
+    try {
+      xrSession = await navigator.xr.requestSession('immersive-ar', { requiredFeatures: ['local-floor'] });
+      renderer.xr.setSession(xrSession);
+      document.getElementById('ar-entry-btn').style.display = 'none';
+      updateStatus('AR ACTIVE');
+      showToast('Mode AR activé');
+    } catch (err) {
+      showToast('Erreur AR: ' + err.message);
+    }
+  };
+}
+
+/* ═══════════════════════════════════════════════════════
+   NAVIGATION ARROWS
+═══════════════════════════════════════════════════════ */
+function setDestination() {
+  const lat = parseFloat(prompt('Latitude destination:', (currentPosition.lat + 0.002).toFixed(6)));
+  const lon = parseFloat(prompt('Longitude destination:', (currentPosition.lon + 0.002).toFixed(6)));
+  if (isNaN(lat) || isNaN(lon)) return;
+  destination = { lat, lon };
+  updateNavigation();
+}
+
+function clearArrows() {
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+  document.getElementById('nav-bearing').textContent = '--°';
+  document.getElementById('nav-dist').textContent    = '--m';
+  showToast('Flèches effacées');
+}
+
+function createArrow() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 3.0, 12),
+    new THREE.MeshPhongMaterial({ color: 0xFFB300 })
+  );
+  body.rotation.x = Math.PI / 2;
+  g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.ConeGeometry(0.35, 1.2, 12),
+    new THREE.MeshPhongMaterial({ color: 0xFFB300 })
+  );
+  head.rotation.x = Math.PI / 2;
+  head.position.z = 2.1;
+  g.add(head);
+  return g;
+}
+
+function updateNavigation() {
+  if (!destination) return;
+  const bearing = calculateBearing(currentPosition.lat, currentPosition.lon, destination.lat, destination.lon);
+  const dist    = Math.round(distance(currentPosition, destination));
+  const angle   = bearing * Math.PI / 180;
+
+  document.getElementById('nav-bearing').textContent = bearing.toFixed(0) + '°';
+  document.getElementById('nav-dist').textContent    = dist + 'm';
+
+  navigationArrows.forEach(a => scene.remove(a));
+  navigationArrows = [];
+
+  for (let i = 1; i <= 4; i++) {
+    const arr = createArrow();
+    arr.rotation.y = angle;
+    arr.position.set(Math.sin(angle) * 1.5, 0.3, -i * 4.5);
+    scene.add(arr);
+    navigationArrows.push(arr);
+  }
+  updateStatus(`→ Direction ${bearing.toFixed(0)}° · ${dist}m`);
+}
+
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const φ1=lat1*Math.PI/180, φ2=lat2*Math.PI/180;
+  const Δλ=(lon2-lon1)*Math.PI/180;
+  const y=Math.sin(Δλ)*Math.cos(φ2);
+  const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+
+/* ═══════════════════════════════════════════════════════
+   BOOT
+═══════════════════════════════════════════════════════ */
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
