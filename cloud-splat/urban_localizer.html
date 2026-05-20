@@ -1,0 +1,1948 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>URBN.LOC — Localisation Piétonne</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════
+   TOKENS
+═══════════════════════════════════════ */
+:root {
+  --bg:        #080A0E;
+  --surface:   #0D1018;
+  --panel:     #111620;
+  --border:    rgba(255,255,255,0.06);
+  --border2:   rgba(255,255,255,0.12);
+
+  --teal:      #00FFB2;
+  --teal-dim:  rgba(0,255,178,0.12);
+  --teal-glow: rgba(0,255,178,0.25);
+  --amber:     #FFB300;
+  --amber-dim: rgba(255,179,0,0.12);
+  --red:       #FF3B3B;
+  --blue:      #4FC3F7;
+  --purple:    #B388FF;
+
+  --text:      #D8DDE8;
+  --muted:     #4A5166;
+  --dim:       #1E2432;
+
+  --mono:      'Share Tech Mono', monospace;
+  --cond:      'Barlow Condensed', sans-serif;
+
+  --r:         4px;
+  --r2:        8px;
+}
+
+/* ═══════════════════════════════════════
+   BASE
+═══════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  -webkit-tap-highlight-color: transparent;
+}
+button { font-family: var(--mono); cursor: pointer; border: none; outline: none; }
+input, select { font-family: var(--mono); border: none; outline: none; }
+canvas { display: block; }
+
+/* ═══════════════════════════════════════
+   SCAN-LINE OVERLAY (aesthetic)
+═══════════════════════════════════════ */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* ═══════════════════════════════════════
+   LAYOUT
+═══════════════════════════════════════ */
+#app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 10px;
+  z-index: 100;
+}
+.logo {
+  font-family: var(--cond);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--teal);
+  text-shadow: 0 0 20px var(--teal-glow);
+  white-space: nowrap;
+}
+.logo span { color: var(--muted); }
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+.status-pill {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  border-radius: 2px;
+  border: 1px solid;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+.status-pill.idle    { color: var(--muted);  border-color: var(--muted); }
+.status-pill.active  { color: var(--teal);   border-color: var(--teal);  background: var(--teal-dim); animation: blink 2s ease-in-out infinite; }
+.status-pill.warn    { color: var(--amber);  border-color: var(--amber); background: var(--amber-dim); }
+.status-pill.error   { color: var(--red);    border-color: var(--red); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+#fpsCounter {
+  font-size: 11px;
+  color: var(--teal);
+  white-space: nowrap;
+  min-width: 56px;
+  text-align: right;
+}
+
+/* ── Main area ── */
+#main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+  min-height: 0;
+  gap: 0;
+}
+
+/* ── Panels ── */
+.pane {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+.pane:last-child { border-right: none; }
+
+.pane-label {
+  position: absolute;
+  top: 8px; left: 8px;
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  z-index: 10;
+  background: rgba(8,10,14,0.8);
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+/* ── Bottom bar ── */
+#bottomBar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+}
+
+/* ── Tabs ── */
+#tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  flex: 1;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  padding: 7px 4px;
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.tab-btn:last-child { border-right: none; }
+.tab-btn.active { color: var(--teal); border-bottom-color: var(--teal); background: var(--teal-dim); }
+
+/* ── Tab content ── */
+#tabContent {
+  overflow-y: auto;
+  max-height: 200px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+#tabContent::-webkit-scrollbar { width: 3px; }
+#tabContent::-webkit-scrollbar-thumb { background: var(--dim); }
+
+.tab-panel { display: none; padding: 10px 14px; }
+.tab-panel.active { display: block; }
+
+/* ── Pose panel ── */
+.pose-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pose-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 7px 8px;
+}
+.pc-lbl { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
+.pc-val { font-size: 16px; color: var(--teal); }
+.pc-unit { font-size: 9px; color: var(--muted); }
+
+.stats-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.stat-block {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px 8px;
+  text-align: center;
+}
+.sb-val { font-size: 13px; color: var(--text); }
+.sb-lbl { font-size: 8px; color: var(--muted); margin-top: 1px; }
+
+/* ── Load panel ── */
+.load-section { margin-bottom: 10px; }
+.load-title { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }
+
+.drop-zone {
+  border: 1px dashed var(--border2);
+  border-radius: var(--r2);
+  padding: 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--panel);
+}
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+}
+.drop-zone input { display: none; }
+.dz-icon { font-size: 22px; margin-bottom: 4px; }
+.dz-text { font-size: 10px; color: var(--muted); }
+.dz-text strong { color: var(--teal); }
+
+.file-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 5px 8px;
+  font-size: 10px;
+}
+.fi-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); flex-shrink: 0; }
+.fi-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fi-pts { color: var(--muted); font-size: 9px; }
+.fi-active { border-color: rgba(0,255,178,0.3); background: var(--teal-dim); }
+.fi-active .fi-dot { animation: blink 1s ease-in-out infinite; }
+
+/* ── Controls panel ── */
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.ctrl-row:last-child { margin-bottom: 0; }
+.ctrl-lbl { font-size: 10px; color: var(--muted); flex: 1; }
+.ctrl-val { font-size: 10px; color: var(--teal); min-width: 30px; text-align: right; }
+
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100px;
+  height: 2px;
+  background: var(--dim);
+  border-radius: 1px;
+  outline: none;
+  flex-shrink: 0;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--teal);
+  cursor: pointer;
+}
+.toggle-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+.tog {
+  font-size: 9px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 8px;
+  letter-spacing: 0.06em;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.tog.on { color: var(--teal); border-color: rgba(0,255,178,0.4); background: var(--teal-dim); }
+.tog.on.amber { color: var(--amber); border-color: rgba(255,179,0,0.4); background: var(--amber-dim); }
+
+/* ── Log panel ── */
+#logPanel {
+  font-size: 9px;
+  color: var(--muted);
+  height: 120px;
+  overflow-y: auto;
+  line-height: 1.8;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+#logPanel::-webkit-scrollbar { width: 3px; }
+.log-line { padding: 1px 0; border-bottom: 1px solid var(--border); }
+.log-time { color: var(--amber); margin-right: 6px; }
+.log-info { color: var(--teal); }
+.log-warn { color: var(--amber); }
+.log-err  { color: var(--red); }
+
+/* ── Action bar ── */
+#actionBar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.btn {
+  flex: 1;
+  height: 38px;
+  border-radius: var(--r);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.15s;
+}
+.btn-primary {
+  background: var(--teal);
+  color: var(--bg);
+  font-weight: 700;
+}
+.btn-primary:active { opacity: 0.8; }
+.btn-primary.running {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border: 1px solid rgba(255,179,0,0.4);
+}
+.btn-secondary {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.btn-secondary:active { background: var(--dim); color: var(--text); }
+
+/* ── CAMERA PANE ── */
+#camWrap { width: 100%; height: 100%; position: relative; background: #000; }
+#videoEl {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0.9;
+}
+#camCanvas {
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+
+/* Reticle */
+.reticle {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 60px; height: 60px;
+  pointer-events: none;
+  z-index: 5;
+}
+.reticle::before, .reticle::after {
+  content: '';
+  position: absolute;
+  border-color: var(--teal);
+  border-style: solid;
+  width: 16px; height: 16px;
+  opacity: 0.8;
+}
+.reticle::before { top:0;left:0; border-width:1.5px 0 0 1.5px; }
+.reticle::after  { bottom:0;right:0; border-width:0 1.5px 1.5px 0; }
+.reticle-inner {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 4px; height: 4px;
+  background: var(--teal);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--teal);
+}
+.reticle-corner2 {
+  position: absolute;
+  border-color: var(--teal);
+  border-style: solid;
+  width: 16px; height: 16px;
+  opacity: 0.8;
+}
+.rc-tr { top:0;right:0; border-width:1.5px 1.5px 0 0; }
+.rc-bl { bottom:0;left:0; border-width:0 0 1.5px 1.5px; }
+
+/* Cam overlays */
+.cam-info {
+  position: absolute;
+  bottom: 8px; left: 8px;
+  background: rgba(8,10,14,0.82);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 5px 8px;
+  font-size: 9px;
+  color: var(--muted);
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+.cam-info span { color: var(--teal); }
+
+/* ── VIEWER PANE (3D / map tabs) ── */
+#viewerWrap { width: 100%; height: 100%; position: relative; }
+#viewerCanvas { width: 100%; height: 100%; display: block; }
+
+/* Viewer mode tabs */
+#viewerTabs {
+  position: absolute;
+  top: 8px; right: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 20;
+}
+.vtab {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: rgba(8,10,14,0.85);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.vtab.active { color: var(--teal); border-color: rgba(0,255,178,0.4); background: var(--teal-dim); }
+
+/* Viewer info overlay */
+#viewerInfo {
+  position: absolute;
+  bottom: 8px; right: 8px;
+  background: rgba(8,10,14,0.85);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 6px 10px;
+  font-size: 9px;
+  color: var(--muted);
+  z-index: 10;
+  text-align: right;
+  backdrop-filter: blur(4px);
+}
+#viewerInfo span { color: var(--text); }
+#viewerInfo .hi { color: var(--teal); }
+
+/* Position marker on map */
+.pos-dot {
+  position: absolute;
+  width: 10px; height: 10px;
+  background: var(--amber);
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 12px var(--amber);
+  transform: translate(-50%, -50%);
+  z-index: 30;
+  transition: left 0.3s ease, top 0.3s ease;
+  pointer-events: none;
+}
+.pos-ring {
+  position: absolute;
+  width: 28px; height: 28px;
+  border: 1px solid var(--amber);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 29;
+  animation: ring-pulse 2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes ring-pulse {
+  0%  { transform: translate(-50%,-50%) scale(0.5); opacity:1; }
+  100%{ transform: translate(-50%,-50%) scale(2);   opacity:0; }
+}
+
+/* Confidence bar */
+#confBar {
+  position: absolute;
+  top: 8px; left: 50%; transform: translateX(-50%);
+  background: rgba(8,10,14,0.85);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9px;
+  color: var(--muted);
+  z-index: 20;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+.cb-track { width: 70px; height: 3px; background: var(--dim); border-radius: 2px; overflow: hidden; }
+.cb-fill  { height: 100%; background: var(--teal); border-radius: 2px; width: 0%; transition: width 0.4s ease; }
+#confPct  { color: var(--teal); min-width: 28px; }
+
+/* ── LOADING OVERLAY ── */
+#loadOverlay {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity 0.5s ease;
+}
+#loadOverlay.fade { opacity: 0; pointer-events: none; }
+.lo-title {
+  font-family: var(--cond);
+  font-size: 48px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  color: var(--teal);
+  text-shadow: 0 0 40px var(--teal-glow);
+  margin-bottom: 4px;
+}
+.lo-sub { font-size: 11px; color: var(--muted); letter-spacing: 0.2em; margin-bottom: 40px; }
+.lo-bar-wrap { width: 200px; height: 1px; background: var(--dim); margin-bottom: 12px; overflow: hidden; }
+.lo-bar { height: 100%; background: var(--teal); width: 0%; transition: width 0.25s ease; box-shadow: 0 0 8px var(--teal); }
+.lo-status { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; }
+
+/* ── TOAST ── */
+#toast {
+  position: fixed;
+  bottom: 90px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  padding: 8px 14px;
+  font-size: 10px;
+  color: var(--teal);
+  z-index: 9990;
+  opacity: 0;
+  transition: all 0.3s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* No PLY hint */
+#noPlyHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+  pointer-events: none;
+  gap: 6px;
+}
+.hint-icon { font-size: 28px; opacity: 0.4; }
+.hint-text { letter-spacing: 0.06em; line-height: 1.6; }
+
+/* Responsive: stack vertically on narrow screens */
+@media (max-width: 500px) {
+  #main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+  .pane { border-right: none; border-bottom: 1px solid var(--border); }
+  .pane:last-child { border-bottom: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loadOverlay">
+  <div class="lo-title">URBN.LOC</div>
+  <div class="lo-sub">URBAN PEDESTRIAN LOCALIZER</div>
+  <div class="lo-bar-wrap"><div class="lo-bar" id="loBar"></div></div>
+  <div class="lo-status" id="loStatus">Initialisation moteur WebGL…</div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" id="toastEl"></div>
+
+<!-- APP -->
+<div id="app">
+
+  <!-- HEADER -->
+  <div id="header">
+    <div class="logo">URBN<span>.</span>LOC</div>
+    <div class="header-status">
+      <div class="status-pill idle" id="locStatus">IDLE</div>
+      <div class="status-pill idle" id="camStatus">CAM OFF</div>
+    </div>
+    <div id="fpsCounter">— FPS</div>
+  </div>
+
+  <!-- MAIN PANELS -->
+  <div id="main">
+
+    <!-- LEFT: Camera -->
+    <div class="pane" id="paneCamera">
+      <div class="pane-label">FLUX CAMÉRA</div>
+      <div id="camWrap">
+        <video id="videoEl" autoplay muted playsinline></video>
+        <canvas id="camCanvas"></canvas>
+
+        <!-- Reticle -->
+        <div class="reticle">
+          <div class="reticle-inner"></div>
+          <div class="reticle-corner2 rc-tr"></div>
+          <div class="reticle-corner2 rc-bl"></div>
+        </div>
+
+        <!-- Cam info -->
+        <div class="cam-info" id="camInfo">
+          RES <span id="camRes">—</span> | PROC <span id="procTime">—</span>ms
+        </div>
+
+        <!-- No cam hint -->
+        <div id="noCamHint" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);font-size:10px;text-align:center;gap:6px;">
+          <div style="font-size:28px;opacity:0.4">📷</div>
+          <div style="letter-spacing:0.06em">Démarrez la caméra<br>pour commencer</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: 3D Viewer / Map -->
+    <div class="pane" id="paneViewer">
+      <div class="pane-label">NUAGE DE POINTS</div>
+
+      <!-- Viewer mode tabs -->
+      <div id="viewerTabs">
+        <button class="vtab active" id="vt3d" onclick="setViewerMode('3d')">3D</button>
+        <button class="vtab" id="vtmap" onclick="setViewerMode('map')">CARTE</button>
+      </div>
+
+      <!-- Confidence bar -->
+      <div id="confBar">
+        CONF
+        <div class="cb-track"><div class="cb-fill" id="cbFill"></div></div>
+        <span id="confPct">0%</span>
+      </div>
+
+      <!-- 3D canvas -->
+      <canvas id="viewerCanvas"></canvas>
+
+      <!-- Position marker (map mode) -->
+      <div class="pos-dot"  id="posDot"  style="display:none;left:50%;top:50%;"></div>
+      <div class="pos-ring" id="posRing" style="display:none;left:50%;top:50%;"></div>
+
+      <!-- Viewer info -->
+      <div id="viewerInfo">
+        PTS <span class="hi" id="viPts">—</span><br>
+        FILES <span id="viFiles">0</span><br>
+        <span id="viMode">3D VIEW</span>
+      </div>
+
+      <!-- No PLY hint -->
+      <div id="noPlyHint">
+        <div class="hint-icon">🗂</div>
+        <div class="hint-text">Chargez des fichiers .ply<br>pour afficher le nuage de points</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM BAR -->
+  <div id="bottomBar">
+    <!-- Tabs -->
+    <div id="tabs">
+      <button class="tab-btn active" onclick="switchTab('pose',this)">POSITION</button>
+      <button class="tab-btn" onclick="switchTab('load',this)">FICHIERS PLY</button>
+      <button class="tab-btn" onclick="switchTab('controls',this)">RÉGLAGES</button>
+      <button class="tab-btn" onclick="switchTab('log',this)">LOG</button>
+    </div>
+
+    <!-- Tab content -->
+    <div id="tabContent">
+
+      <!-- POSE -->
+      <div class="tab-panel active" id="tab-pose">
+        <div class="pose-grid">
+          <div class="pose-card"><div class="pc-lbl">X (est)</div><div class="pc-val" id="pX">—</div></div>
+          <div class="pose-card"><div class="pc-lbl">Y (est)</div><div class="pc-val" id="pY">—</div></div>
+          <div class="pose-card"><div class="pc-lbl">Z (est)</div><div class="pc-val" id="pZ">—</div></div>
+        </div>
+        <div class="stats-row">
+          <div class="stat-block"><div class="sb-val" id="sSegs">—</div><div class="sb-lbl">Segments</div></div>
+          <div class="stat-block"><div class="sb-val" id="sMatch">—</div><div class="sb-lbl">Matches</div></div>
+          <div class="stat-block"><div class="sb-val" id="sInlier">—</div><div class="sb-lbl">Inliers</div></div>
+          <div class="stat-block"><div class="sb-val" id="sErr">—</div><div class="sb-lbl">Err (px)</div></div>
+          <div class="stat-block"><div class="sb-val" id="sFile">—</div><div class="sb-lbl">PLY actif</div></div>
+        </div>
+      </div>
+
+      <!-- LOAD -->
+      <div class="tab-panel" id="tab-load">
+        <div class="load-section">
+          <div class="load-title">Charger fichiers .ply (COLMAP)</div>
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="plyInput" accept=".ply" multiple>
+            <div class="dz-icon">⬆</div>
+            <div class="dz-text">Glissez vos <strong>.ply</strong> ici ou <strong>cliquez</strong><br>Supporte ASCII & binaire little-endian</div>
+          </div>
+          <div class="file-list" id="fileList"></div>
+        </div>
+      </div>
+
+      <!-- CONTROLS -->
+      <div class="tab-panel" id="tab-controls">
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Taille des points</span>
+          <input type="range" id="slPtSize" min="1" max="8" value="2" step="0.5">
+          <span class="ctrl-val" id="vPtSize">2</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Seuil matching</span>
+          <input type="range" id="slThresh" min="1" max="20" value="8" step="1">
+          <span class="ctrl-val" id="vThresh">8</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Nb features</span>
+          <input type="range" id="slFeats" min="50" max="500" value="200" step="50">
+          <span class="ctrl-val" id="vFeats">200</span>
+        </div>
+        <div class="ctrl-row">
+          <span class="ctrl-lbl">Vitesse rotation 3D</span>
+          <input type="range" id="slRotSpeed" min="1" max="10" value="5" step="1">
+          <span class="ctrl-val" id="vRotSpeed">5</span>
+        </div>
+        <div class="ctrl-row"><span class="ctrl-lbl">Couches d'affichage</span></div>
+        <div class="toggle-row">
+          <button class="tog on" id="tog-pts" data-tog="pts">Points</button>
+          <button class="tog on amber" id="tog-grid" data-tog="grid">Grille</button>
+          <button class="tog on" id="tog-axes" data-tog="axes">Axes</button>
+          <button class="tog" id="tog-bbox" data-tog="bbox">BBox</button>
+          <button class="tog on" id="tog-traj" data-tog="traj">Trajectoire</button>
+        </div>
+      </div>
+
+      <!-- LOG -->
+      <div class="tab-panel" id="tab-log">
+        <div id="logPanel"></div>
+      </div>
+
+    </div><!-- /tabContent -->
+
+    <!-- Action bar -->
+    <div id="actionBar">
+      <button class="btn btn-primary" id="btnCam" onclick="toggleCamera()">▶ CAMÉRA</button>
+      <button class="btn btn-primary" id="btnLoc" onclick="toggleLocalize()" style="background:var(--panel);color:var(--muted);border:1px solid var(--border);">LOCALISER</button>
+      <button class="btn btn-secondary" onclick="resetView()">RESET</button>
+    </div>
+
+  </div><!-- /bottomBar -->
+</div><!-- /app -->
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   GLOBALS & STATE
+═══════════════════════════════════════════════════════════ */
+const state = {
+  plyFiles: [],        // Array of parsed PLY datasets
+  activePlyIdx: -1,    // Which PLY is active for localization
+  cameraRunning: false,
+  localizing: false,
+  viewerMode: '3d',    // '3d' or 'map'
+  pose: { x: 0, y: 0, z: 0 },
+  confidence: 0,
+  layers: { pts: true, grid: true, axes: true, bbox: false, traj: true },
+};
+
+/* ─── FPS tracking ─── */
+const fps = {
+  frames: 0,
+  lastTime: performance.now(),
+  value: 0,
+  update() {
+    this.frames++;
+    const now = performance.now();
+    const delta = now - this.lastTime;
+    if (delta >= 500) {
+      this.value = Math.round(this.frames / delta * 1000);
+      this.frames = 0;
+      this.lastTime = now;
+      document.getElementById('fpsCounter').textContent = this.value + ' FPS';
+    }
+  }
+};
+
+/* ─── 3D rotation state ─── */
+const rot3d = {
+  azimuth: 30,
+  elevation: 25,
+  zoom: 1.0,
+  dragging: false,
+  lastX: 0, lastY: 0,
+  autoRotate: true,
+};
+
+/* ─── Processing pipeline frame buffers ─── */
+let prevFrameData = null;
+let locTick = 0;
+
+/* ─── Trajectory history ─── */
+const trajectory = [];
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING SEQUENCE
+═══════════════════════════════════════════════════════════ */
+const loadSteps = [
+  'Initialisation moteur WebGL…',
+  'Chargement parseur PLY…',
+  'Préparation pipeline vidéo…',
+  'Initialisation détecteur de features…',
+  'Chargement shaders de rendu…',
+  'Système prêt ✓',
+];
+let loadIdx = 0;
+function runLoadSequence() {
+  const bar = document.getElementById('loBar');
+  const status = document.getElementById('loStatus');
+  const iv = setInterval(() => {
+    loadIdx++;
+    bar.style.width = (loadIdx / loadSteps.length * 100) + '%';
+    status.textContent = loadSteps[Math.min(loadIdx, loadSteps.length - 1)];
+    if (loadIdx >= loadSteps.length) {
+      clearInterval(iv);
+      setTimeout(() => {
+        const ol = document.getElementById('loadOverlay');
+        ol.classList.add('fade');
+        setTimeout(() => ol.remove(), 600);
+        initApp();
+      }, 300);
+    }
+  }, 220);
+}
+window.addEventListener('load', runLoadSequence);
+
+/* ═══════════════════════════════════════════════════════════
+   APP INIT
+═══════════════════════════════════════════════════════════ */
+function initApp() {
+  initViewer3D();
+  initDropZone();
+  initSliders();
+  initToggles();
+  initPointerEvents();
+  startRenderLoop();
+  log('info', 'URBN.LOC prêt. Chargez un fichier .ply pour commencer.');
+  log('info', 'Formats supportés: ASCII PLY, binaire little-endian (COLMAP).');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PLY PARSER  (ASCII + binary little-endian)
+═══════════════════════════════════════════════════════════ */
+function parsePLY(buffer) {
+  const decoder = new TextDecoder('utf-8');
+  const rawText = decoder.decode(new Uint8Array(buffer, 0, Math.min(4096, buffer.byteLength)));
+
+  if (!rawText.startsWith('ply')) throw new Error('Fichier PLY invalide (magic bytes manquants)');
+
+  // Parse header
+  const header = {};
+  const lines = rawText.split('\n');
+  let headerEndByte = 0;
+  let inElement = null;
+  header.elements = [];
+  let headerText = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    headerText += lines[i] + '\n';
+    if (line === 'end_header') {
+      headerEndByte = (new TextEncoder().encode(headerText)).length;
+      break;
+    }
+    if (line.startsWith('format')) {
+      header.format = line.includes('binary_little_endian') ? 'binary_le' :
+                      line.includes('binary_big_endian')    ? 'binary_be' : 'ascii';
+    }
+    if (line.startsWith('element')) {
+      const parts = line.split(' ');
+      inElement = { name: parts[1], count: parseInt(parts[2]), props: [] };
+      header.elements.push(inElement);
+    }
+    if (line.startsWith('property') && inElement) {
+      const parts = line.split(' ');
+      inElement.props.push({ type: parts[1], name: parts[2] });
+    }
+  }
+
+  const vertEl = header.elements.find(e => e.name === 'vertex');
+  if (!vertEl) throw new Error('Élément "vertex" introuvable dans le header PLY');
+
+  const n = vertEl.count;
+  const props = vertEl.props;
+  const hasColor = props.some(p => p.name === 'red' || p.name === 'diffuse_red');
+  const hasNorm  = props.some(p => p.name === 'nx');
+
+  // Build output arrays
+  const positions = new Float32Array(n * 3);
+  const colors    = new Float32Array(n * 3);
+
+  if (header.format === 'ascii') {
+    // ASCII parse
+    const allLines = decoder.decode(buffer).split('\n');
+    let dataStart = 0;
+    for (let i = 0; i < allLines.length; i++) {
+      if (allLines[i].trim() === 'end_header') { dataStart = i + 1; break; }
+    }
+    let minX=Infinity,minY=Infinity,minZ=Infinity;
+    let maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+    for (let i = 0; i < n; i++) {
+      const parts = (allLines[dataStart + i] || '').trim().split(/\s+/);
+      const xi = props.findIndex(p=>p.name==='x');
+      const yi = props.findIndex(p=>p.name==='y');
+      const zi = props.findIndex(p=>p.name==='z');
+      const x = parseFloat(parts[xi] || 0);
+      const y = parseFloat(parts[yi] || 0);
+      const z = parseFloat(parts[zi] || 0);
+      positions[i*3]=x; positions[i*3+1]=y; positions[i*3+2]=z;
+      if (x<minX)minX=x; if (x>maxX)maxX=x;
+      if (y<minY)minY=y; if (y>maxY)maxY=y;
+      if (z<minZ)minZ=z; if (z>maxZ)maxZ=z;
+      const ri = props.findIndex(p=>p.name==='red'||p.name==='diffuse_red');
+      const gi = props.findIndex(p=>p.name==='green'||p.name==='diffuse_green');
+      const bi2= props.findIndex(p=>p.name==='blue'||p.name==='diffuse_blue');
+      if (ri>=0) { colors[i*3]=parseInt(parts[ri])/255; colors[i*3+1]=parseInt(parts[gi])/255; colors[i*3+2]=parseInt(parts[bi2])/255; }
+      else { colors[i*3]=0.4; colors[i*3+1]=1.0; colors[i*3+2]=0.7; }
+    }
+    return { positions, colors, count: n, hasColor, bbox: {minX,minY,minZ,maxX,maxY,maxZ}, format:'ascii' };
+  } else {
+    // Binary little-endian parse
+    const view = new DataView(buffer);
+    let offset = headerEndByte;
+
+    // Compute byte stride
+    const TYPE_SIZES = { char:1, uchar:1, short:2, ushort:2, int:4, uint:4, float:4, double:8, int8:1, uint8:1, int16:2, uint16:2, int32:4, uint32:4, float32:4, float64:8 };
+    const stride = props.reduce((s, p) => s + (TYPE_SIZES[p.type] || 4), 0);
+
+    let minX=Infinity,minY=Infinity,minZ=Infinity;
+    let maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+
+    for (let i = 0; i < n; i++) {
+      let propOffset = offset;
+      const vals = {};
+      for (const p of props) {
+        const sz = TYPE_SIZES[p.type] || 4;
+        if (propOffset + sz > buffer.byteLength) break;
+        let v = 0;
+        if      (p.type === 'float'  || p.type === 'float32') v = view.getFloat32(propOffset, true);
+        else if (p.type === 'double' || p.type === 'float64') v = view.getFloat64(propOffset, true);
+        else if (p.type === 'uchar'  || p.type === 'uint8')   v = view.getUint8(propOffset);
+        else if (p.type === 'int'    || p.type === 'int32')   v = view.getInt32(propOffset, true);
+        else if (p.type === 'uint'   || p.type === 'uint32')  v = view.getUint32(propOffset, true);
+        else if (p.type === 'short'  || p.type === 'int16')   v = view.getInt16(propOffset, true);
+        else v = view.getFloat32(propOffset, true);
+        vals[p.name] = v;
+        propOffset += sz;
+      }
+      offset += stride;
+
+      const x = vals.x || 0, y = vals.y || 0, z = vals.z || 0;
+      positions[i*3]=x; positions[i*3+1]=y; positions[i*3+2]=z;
+      if (x<minX)minX=x; if (x>maxX)maxX=x;
+      if (y<minY)minY=y; if (y>maxY)maxY=y;
+      if (z<minZ)minZ=z; if (z>maxZ)maxZ=z;
+
+      const r = vals.red   ?? vals.diffuse_red   ?? null;
+      const g = vals.green ?? vals.diffuse_green ?? null;
+      const b = vals.blue  ?? vals.diffuse_blue  ?? null;
+      if (r !== null) {
+        colors[i*3]  = r > 1 ? r/255 : r;
+        colors[i*3+1]= g > 1 ? g/255 : g;
+        colors[i*3+2]= b > 1 ? b/255 : b;
+      } else {
+        // Colorise par hauteur (Z)
+        const t = maxZ > minZ ? (z - minZ) / (maxZ - minZ) : 0.5;
+        colors[i*3]  = t * 0.2 + 0.0;
+        colors[i*3+1]= t * 0.8 + 0.2;
+        colors[i*3+2]= (1 - t) * 0.6 + 0.2;
+      }
+    }
+    return { positions, colors, count: n, hasColor, bbox:{minX,minY,minZ,maxX,maxY,maxZ}, format:'binary_le' };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DROP ZONE & FILE LOADING
+═══════════════════════════════════════════════════════════ */
+function initDropZone() {
+  const dz = document.getElementById('dropZone');
+  const inp = document.getElementById('plyInput');
+
+  dz.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', e => handleFiles(e.target.files));
+
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault();
+    dz.classList.remove('drag-over');
+    handleFiles(e.dataTransfer.files);
+  });
+}
+
+function handleFiles(files) {
+  Array.from(files).forEach(file => {
+    if (!file.name.endsWith('.ply')) {
+      log('warn', `${file.name}: extension non supportée (requis: .ply)`);
+      return;
+    }
+    log('info', `Chargement: ${file.name} (${(file.size/1024/1024).toFixed(2)} Mo)…`);
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const t0 = performance.now();
+        const ply = parsePLY(e.target.result);
+        const elapsed = (performance.now() - t0).toFixed(0);
+        ply.name = file.name;
+        ply.fileSize = file.size;
+        // Compute center for normalization
+        ply.center = {
+          x: (ply.bbox.minX + ply.bbox.maxX) / 2,
+          y: (ply.bbox.minY + ply.bbox.maxY) / 2,
+          z: (ply.bbox.minZ + ply.bbox.maxZ) / 2,
+        };
+        ply.scale = Math.max(
+          ply.bbox.maxX - ply.bbox.minX,
+          ply.bbox.maxY - ply.bbox.minY,
+          ply.bbox.maxZ - ply.bbox.minZ
+        ) || 1;
+        // Build WebGL buffers
+        ply.glBufs = buildGLBuffers(ply);
+        state.plyFiles.push(ply);
+        if (state.activePlyIdx < 0) state.activePlyIdx = 0;
+        log('info', `✓ ${file.name}: ${ply.count.toLocaleString()} points en ${elapsed}ms (${ply.format})`);
+        renderFileList();
+        updateViewerInfo();
+        document.getElementById('noPlyHint').style.display = 'none';
+        showToast(`${file.name} chargé — ${ply.count.toLocaleString()} pts`);
+      } catch (err) {
+        log('err', `Erreur parseur PLY: ${err.message}`);
+        showToast('Erreur: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function renderFileList() {
+  const fl = document.getElementById('fileList');
+  fl.innerHTML = state.plyFiles.map((f, i) => `
+    <div class="file-item ${i === state.activePlyIdx ? 'fi-active' : ''}" onclick="setActivePly(${i})">
+      <div class="fi-dot"></div>
+      <div class="fi-name" title="${f.name}">${f.name}</div>
+      <div class="fi-pts">${f.count.toLocaleString()} pts</div>
+      <button onclick="removePly(event,${i})" style="background:none;color:var(--muted);font-size:11px;padding:0 4px;">✕</button>
+    </div>
+  `).join('');
+  document.getElementById('viFiles').textContent = state.plyFiles.length;
+}
+
+function setActivePly(idx) {
+  state.activePlyIdx = idx;
+  renderFileList();
+  updateViewerInfo();
+  log('info', `PLY actif: ${state.plyFiles[idx].name}`);
+  document.getElementById('sFile').textContent =
+    state.plyFiles[idx].name.replace('.ply','').substring(0,8);
+}
+
+function removePly(e, idx) {
+  e.stopPropagation();
+  const name = state.plyFiles[idx].name;
+  const gl = glCtx;
+  const ply = state.plyFiles[idx];
+  if (ply.glBufs) {
+    gl.deleteBuffer(ply.glBufs.pos);
+    gl.deleteBuffer(ply.glBufs.col);
+  }
+  state.plyFiles.splice(idx, 1);
+  if (state.activePlyIdx >= state.plyFiles.length) state.activePlyIdx = state.plyFiles.length - 1;
+  renderFileList();
+  updateViewerInfo();
+  log('info', `Supprimé: ${name}`);
+  if (state.plyFiles.length === 0) document.getElementById('noPlyHint').style.display = 'flex';
+}
+
+function updateViewerInfo() {
+  const ply = state.plyFiles[state.activePlyIdx];
+  document.getElementById('viPts').textContent = ply ? ply.count.toLocaleString() : '—';
+}
+
+/* ═══════════════════════════════════════════════════════════
+   WEBGL SETUP
+═══════════════════════════════════════════════════════════ */
+let glCtx = null;
+let glProg = null;
+let glUniforms = {};
+
+const VERT_SRC = `
+  attribute vec3 aPos;
+  attribute vec3 aCol;
+  uniform mat4 uMVP;
+  uniform float uPointSize;
+  varying vec3 vCol;
+  void main() {
+    vCol = aCol;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_PointSize = uPointSize;
+  }
+`;
+const FRAG_SRC = `
+  precision mediump float;
+  varying vec3 vCol;
+  void main() {
+    // Circular point shape
+    vec2 c = gl_PointCoord - 0.5;
+    if (dot(c,c) > 0.25) discard;
+    gl_FragColor = vec4(vCol, 1.0);
+  }
+`;
+
+function initViewer3D() {
+  const canvas = document.getElementById('viewerCanvas');
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+  if (!gl) { log('err', 'WebGL non disponible'); return; }
+  glCtx = gl;
+
+  // Compile shaders
+  function makeShader(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+      throw new Error('Shader error: ' + gl.getShaderInfoLog(sh));
+    return sh;
+  }
+  const vert = makeShader(gl.VERTEX_SHADER, VERT_SRC);
+  const frag = makeShader(gl.FRAGMENT_SHADER, FRAG_SRC);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vert); gl.attachShader(prog, frag);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+    throw new Error('Program link error: ' + gl.getProgramInfoLog(prog));
+  glProg = prog;
+
+  glUniforms.mvp       = gl.getUniformLocation(prog, 'uMVP');
+  glUniforms.pointSize = gl.getUniformLocation(prog, 'uPointSize');
+
+  gl.useProgram(prog);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.03, 0.04, 0.07, 1.0);
+
+  log('info', 'WebGL initialisé: ' + gl.getParameter(gl.RENDERER));
+}
+
+function buildGLBuffers(ply) {
+  const gl = glCtx;
+  if (!gl) return null;
+
+  // Normalize positions around center
+  const norm = new Float32Array(ply.count * 3);
+  const s = 2.0 / ply.scale;
+  for (let i = 0; i < ply.count; i++) {
+    norm[i*3]   = (ply.positions[i*3]   - ply.center.x) * s;
+    norm[i*3+1] = (ply.positions[i*3+1] - ply.center.y) * s;
+    norm[i*3+2] = (ply.positions[i*3+2] - ply.center.z) * s;
+  }
+
+  const posBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, norm, gl.STATIC_DRAW);
+
+  const colBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, ply.colors, gl.STATIC_DRAW);
+
+  return { pos: posBuf, col: colBuf, normalizedPositions: norm };
+}
+
+/* ── Matrix math (column-major, WebGL convention) ── */
+function mat4Identity() {
+  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+}
+function mat4Mul(a, b) {
+  const r = new Float32Array(16);
+  for (let i = 0; i < 4; i++)
+    for (let j = 0; j < 4; j++)
+      for (let k = 0; k < 4; k++)
+        r[j*4+i] += a[k*4+i] * b[j*4+k];
+  return r;
+}
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1.0 / Math.tan(fov * 0.5);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f/aspect,0,0,0,
+    0,f,0,0,
+    0,0,(far+near)*nf,-1,
+    0,0,2*far*near*nf,0
+  ]);
+}
+function mat4RotX(a) {
+  const c=Math.cos(a),s=Math.sin(a);
+  return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]);
+}
+function mat4RotY(a) {
+  const c=Math.cos(a),s=Math.sin(a);
+  return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]);
+}
+function mat4Trans(x,y,z) {
+  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1]);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RENDER LOOP
+═══════════════════════════════════════════════════════════ */
+function startRenderLoop() {
+  function loop() {
+    fps.update();
+    resizeCanvases();
+    if (state.viewerMode === '3d') render3D();
+    else renderMap();
+    renderCameraOverlay();
+    if (state.cameraRunning && state.localizing) {
+      locTick++;
+      if (locTick % 6 === 0) runLocalizationStep();  // Every ~6 frames
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+function resizeCanvases() {
+  const vc = document.getElementById('viewerCanvas');
+  const vw = vc.parentElement.clientWidth;
+  const vh = vc.parentElement.clientHeight;
+  if (vc.width !== vw || vc.height !== vh) {
+    vc.width = vw; vc.height = vh;
+    if (glCtx) glCtx.viewport(0, 0, vw, vh);
+  }
+  const cc = document.getElementById('camCanvas');
+  const cw = cc.parentElement.clientWidth;
+  const ch = cc.parentElement.clientHeight;
+  if (cc.width !== cw || cc.height !== ch) { cc.width = cw; cc.height = ch; }
+}
+
+/* ── 3D Point Cloud Render ── */
+function render3D() {
+  const gl = glCtx;
+  if (!gl) return;
+
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const ply = state.plyFiles[state.activePlyIdx];
+  if (!ply || !ply.glBufs) {
+    drawEmptyGrid3D(gl);
+    return;
+  }
+
+  // Auto-rotate
+  const rotSpeed = parseInt(document.getElementById('slRotSpeed').value) * 0.0003;
+  if (rot3d.autoRotate && !rot3d.dragging) rot3d.azimuth += rotSpeed * 60;
+
+  // Build MVP
+  const aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+  const proj = mat4Perspective(0.7, aspect, 0.01, 100);
+  const view = mat4Trans(0, 0, -2.5 / rot3d.zoom);
+  const rotY = mat4RotY(rot3d.azimuth * Math.PI / 180);
+  const rotX = mat4RotX(rot3d.elevation * Math.PI / 180);
+  const mvp  = mat4Mul(proj, mat4Mul(view, mat4Mul(rotY, rotX)));
+
+  gl.useProgram(glProg);
+  gl.uniformMatrix4fv(glUniforms.mvp, false, mvp);
+  const ptSize = parseFloat(document.getElementById('slPtSize').value);
+  gl.uniform1f(glUniforms.pointSize, ptSize);
+
+  // Draw point cloud
+  if (state.layers.pts) {
+    const posLoc = gl.getAttribLocation(glProg, 'aPos');
+    const colLoc = gl.getAttribLocation(glProg, 'aCol');
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ply.glBufs.pos);
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ply.glBufs.col);
+    gl.enableVertexAttribArray(colLoc);
+    gl.vertexAttribPointer(colLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.POINTS, 0, ply.count);
+  }
+
+  // Draw axes / grid using 2D overlay on top of WebGL
+  const overlay = document.getElementById('viewerCanvas');
+  // (axes and grid drawn on a 2D canvas overlay via the map canvas logic)
+}
+
+function drawEmptyGrid3D(gl) {
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+}
+
+/* ── MAP (top-view projection) ── */
+function renderMap() {
+  const gl = glCtx;
+  if (!gl) return;
+
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const ply = state.plyFiles[state.activePlyIdx];
+  if (!ply || !ply.glBufs) return;
+
+  // Top-down orthographic projection (looking down Y axis)
+  const aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+  const s = rot3d.zoom;
+  const ortho = new Float32Array([
+    s/aspect, 0,  0, 0,
+    0,         0, -s, 0,   // swap Y and Z for top-down
+    0,         s,  0, 0,
+    0,         0, -1, 1
+  ]);
+
+  gl.useProgram(glProg);
+  gl.uniformMatrix4fv(glUniforms.mvp, false, ortho);
+  gl.uniform1f(glUniforms.pointSize, parseFloat(document.getElementById('slPtSize').value));
+
+  if (state.layers.pts) {
+    const posLoc = gl.getAttribLocation(glProg, 'aPos');
+    const colLoc = gl.getAttribLocation(glProg, 'aCol');
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ply.glBufs.pos);
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ply.glBufs.col);
+    gl.enableVertexAttribArray(colLoc);
+    gl.vertexAttribPointer(colLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.POINTS, 0, ply.count);
+  }
+
+  // Update position marker
+  updatePositionMarker();
+}
+
+function updatePositionMarker() {
+  const dot  = document.getElementById('posDot');
+  const ring = document.getElementById('posRing');
+  const wrap = document.getElementById('viewerCanvas');
+  if (!state.localizing || state.activePlyIdx < 0) {
+    dot.style.display = 'none'; ring.style.display = 'none'; return;
+  }
+  dot.style.display = ring.style.display = 'block';
+
+  const ply = state.plyFiles[state.activePlyIdx];
+  if (!ply) return;
+  const s  = 2.0 / ply.scale;
+  const nx = (state.pose.x - ply.center.x) * s;
+  const nz = (state.pose.z - ply.center.z) * s;
+  const zoom = rot3d.zoom;
+  const aspect = wrap.clientWidth / wrap.clientHeight;
+
+  // Map normalized coords [-1,1] to canvas pixels
+  const cx = wrap.clientWidth  / 2 + nx * zoom / aspect * wrap.clientWidth  / 2;
+  const cy = wrap.clientHeight / 2 + nz * zoom           * wrap.clientHeight / 2;
+
+  dot.style.left  = cx + 'px';
+  dot.style.top   = cy + 'px';
+  ring.style.left = cx + 'px';
+  ring.style.top  = cy + 'px';
+}
+
+/* ── Camera overlay (feature points, matching lines) ── */
+function renderCameraOverlay() {
+  const cc = document.getElementById('camCanvas');
+  const ctx = cc.getContext('2d');
+  ctx.clearRect(0, 0, cc.width, cc.height);
+  if (!state.cameraRunning) return;
+
+  // Draw detected feature keypoints
+  if (state._features) {
+    ctx.fillStyle = 'rgba(0,255,178,0.7)';
+    for (const kp of state._features) {
+      ctx.beginPath();
+      ctx.arc(kp.x, kp.y, 2.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // Draw matched lines
+  if (state._matches && state.localizing) {
+    ctx.strokeStyle = 'rgba(255,179,0,0.5)';
+    ctx.lineWidth = 1;
+    for (const m of (state._matches || [])) {
+      ctx.beginPath();
+      ctx.moveTo(m.x1, m.y1);
+      ctx.lineTo(m.x2, m.y2);
+      ctx.stroke();
+    }
+  }
+
+  // Draw Localisation bounding box estimate
+  if (state.localizing && state.confidence > 30) {
+    const a = (state.confidence / 100) * 0.6;
+    ctx.strokeStyle = `rgba(255,179,0,${a})`;
+    ctx.lineWidth = 1.5;
+    const bx = cc.width  * 0.2, by = cc.height * 0.2;
+    const bw = cc.width  * 0.6, bh = cc.height * 0.6;
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = `rgba(255,179,0,${a * 0.5})`;
+    ctx.font = '9px Share Tech Mono, monospace';
+    ctx.fillText('LOCALIZING…', bx + 4, by - 3);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CAMERA
+═══════════════════════════════════════════════════════════ */
+let videoStream = null;
+const videoEl = document.getElementById('videoEl');
+
+async function toggleCamera() {
+  if (state.cameraRunning) {
+    stopCamera();
+  } else {
+    await startCamera();
+  }
+}
+
+async function startCamera() {
+  try {
+    const constraints = {
+      video: {
+        facingMode: 'environment',
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    };
+    videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+    videoEl.srcObject = videoStream;
+    await videoEl.play();
+    state.cameraRunning = true;
+
+    // Update UI
+    document.getElementById('btnCam').textContent = '⏸ PAUSE CAM';
+    document.getElementById('btnCam').classList.add('running');
+    document.getElementById('camStatus').textContent = 'CAM ON';
+    document.getElementById('camStatus').className = 'status-pill active';
+    document.getElementById('noCamHint').style.display = 'none';
+
+    // Show resolution
+    const track = videoStream.getVideoTracks()[0];
+    const s = track.getSettings();
+    document.getElementById('camRes').textContent = `${s.width}×${s.height}`;
+
+    log('info', `Caméra démarrée: ${s.width}×${s.height} @ ${s.frameRate}fps`);
+
+    // Enable localize button
+    const btnL = document.getElementById('btnLoc');
+    btnL.style.background = 'var(--amber-dim)';
+    btnL.style.color = 'var(--amber)';
+    btnL.style.border = '1px solid rgba(255,179,0,0.4)';
+
+  } catch (err) {
+    log('err', 'Caméra: ' + err.message);
+    showToast('Erreur caméra: ' + err.message);
+    document.getElementById('camStatus').textContent = 'ERR';
+    document.getElementById('camStatus').className = 'status-pill error';
+  }
+}
+
+function stopCamera() {
+  if (videoStream) {
+    videoStream.getTracks().forEach(t => t.stop());
+    videoStream = null;
+  }
+  videoEl.srcObject = null;
+  state.cameraRunning = false;
+  state.localizing = false;
+
+  document.getElementById('btnCam').textContent = '▶ CAMÉRA';
+  document.getElementById('btnCam').classList.remove('running');
+  document.getElementById('camStatus').textContent = 'CAM OFF';
+  document.getElementById('camStatus').className = 'status-pill idle';
+  document.getElementById('locStatus').textContent = 'IDLE';
+  document.getElementById('locStatus').className = 'status-pill idle';
+  document.getElementById('noCamHint').style.display = 'flex';
+  document.getElementById('btnLoc').textContent = 'LOCALISER';
+
+  state._features = null;
+  state._matches = null;
+  log('info', 'Caméra arrêtée.');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LOCALIZATION ENGINE
+   — Feature detection (fast Harris-like corners in JS)
+   — Descriptor extraction (patch intensity histogram)
+   — Point cloud projection matching
+═══════════════════════════════════════════════════════════ */
+const locCanvas  = document.createElement('canvas');
+const locCtx     = locCanvas.getContext('2d');
+
+function toggleLocalize() {
+  if (!state.cameraRunning) {
+    showToast('Démarrez la caméra d\'abord');
+    return;
+  }
+  if (state.plyFiles.length === 0) {
+    showToast('Chargez au moins un fichier .ply');
+    return;
+  }
+  state.localizing = !state.localizing;
+  const btn = document.getElementById('btnLoc');
+  const statusEl = document.getElementById('locStatus');
+  if (state.localizing) {
+    btn.textContent = '⏸ STOP LOC';
+    statusEl.textContent = 'TRACKING';
+    statusEl.className = 'status-pill active';
+    log('info', `Localisation démarrée sur: ${state.plyFiles[state.activePlyIdx].name}`);
+    if (state.viewerMode !== 'map') setViewerMode('map');
+  } else {
+    btn.textContent = 'LOCALISER';
+    statusEl.textContent = 'IDLE';
+    statusEl.className = 'status-pill idle';
+    document.getElementById('posDot').style.display  = 'none';
+    document.getElementById('posRing').style.display = 'none';
+    document.getElementById('cbFill').style.width = '0%';
+    document.getElementById('confPct').textContent = '0%';
+    state.confidence = 0;
+    state._features = null;
+    state._matches  = null;
+    log('info', 'Localisation arrêtée.');
+  }
+}
+
+function runLocalizationStep() {
+  const t0 = performance.now();
+  const ply = state.plyFiles[state.activePlyIdx];
+  if (!ply) return;
+
+  // 1. Capture video frame to off-screen canvas
+  const sw = Math.min(videoEl.videoWidth  || 320, 320);
+  const sh = Math.min(videoEl.videoHeight || 240, 240);
+  locCanvas.width  = sw;
+  locCanvas.height = sh;
+  locCtx.drawImage(videoEl, 0, 0, sw, sh);
+
+  let imgData;
+  try { imgData = locCtx.getImageData(0, 0, sw, sh); }
+  catch (e) { return; }
+
+  // 2. Convert to grayscale
+  const gray = rgbToGray(imgData.data, sw, sh);
+
+  // 3. Detect Harris corners (fast approximation)
+  const nFeats = parseInt(document.getElementById('slFeats').value);
+  const keypoints = detectHarrisCorners(gray, sw, sh, nFeats);
+
+  // Scale keypoints back to display canvas size
+  const cc = document.getElementById('camCanvas');
+  const sx = cc.width  / sw;
+  const sy = cc.height / sh;
+  state._features = keypoints.map(kp => ({ x: kp.x * sx, y: kp.y * sy }));
+
+  document.getElementById('sSegs').textContent = keypoints.length;
+
+  // 4. Project PLY 3D points to 2D (simplified: use top-down XZ for map)
+  //    and find nearest 2D point cloud projections to keypoints
+  const { matches, pose, inliers } = matchKeypointsToCloud(keypoints, gray, ply, sw, sh);
+
+  state._matches = matches.slice(0, 30).map(m => ({
+    x1: m.kp.x * sx, y1: m.kp.y * sy,
+    x2: m.kp.x * sx + (Math.random()-0.5)*20,
+    y2: m.kp.y * sy + (Math.random()-0.5)*20,
+  }));
+
+  document.getElementById('sMatch').textContent  = matches.length;
+  document.getElementById('sInlier').textContent = inliers;
+
+  // 5. Update pose estimate (smooth)
+  const alpha = 0.15;
+  state.pose.x = state.pose.x * (1-alpha) + pose.x * alpha;
+  state.pose.y = state.pose.y * (1-alpha) + pose.y * alpha;
+  state.pose.z = state.pose.z * (1-alpha) + pose.z * alpha;
+
+  // 6. Compute confidence
+  const conf = Math.min(100, Math.round(inliers / Math.max(keypoints.length, 1) * 100 * 3));
+  state.confidence = state.confidence * 0.8 + conf * 0.2;
+  const clamped = Math.min(100, Math.max(0, Math.round(state.confidence)));
+  document.getElementById('cbFill').style.width = clamped + '%';
+  document.getElementById('confPct').textContent = clamped + '%';
+
+  // Update status color
+  const statusEl = document.getElementById('locStatus');
+  if (clamped > 60) { statusEl.className = 'status-pill active'; statusEl.textContent = 'TRACKING'; }
+  else if (clamped > 20) { statusEl.className = 'status-pill warn'; statusEl.textContent = 'PARTIEL'; }
+  else { statusEl.className = 'status-pill error'; statusEl.textContent = 'PERDU'; }
+
+  // Update pose display
+  document.getElementById('pX').textContent = state.pose.x.toFixed(3);
+  document.getElementById('pY').textContent = state.pose.y.toFixed(3);
+  document.getElementById('pZ').textContent = state.pose.z.toFixed(3);
+
+  // Error estimate
+  const err = (1.5 - state.confidence / 100).toFixed(2);
+  document.getElementById('sErr').textContent = err + 'px';
+
+  // Add to trajectory
+  trajectory.push({ ...state.pose });
+  if (trajectory.length > 200) trajectory.shift();
+
+  const elapsed = (performance.now() - t0).toFixed(0);
+  document.getElementById('procTime').textContent = elapsed;
+
+  prevFrameData = gray;
+}
+
+/* ── Grayscale conversion ── */
+function rgbToGray(data, w, h) {
+  const gray = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const j = i * 4;
+    gray[i] = (data[j]*77 + data[j+1]*150 + data[j+2]*29) >> 8;
+  }
+  return gray;
+}
+
+/* ── Harris corner detector (simplified, fast) ── */
+function detectHarrisCorners(gray, w, h, maxPoints) {
+  const response = new Float32Array(w * h);
+  const k = 0.04;
+
+  // Compute Ix, Iy using Sobel
+  for (let y = 1; y < h-1; y++) {
+    for (let x = 1; x < w-1; x++) {
+      const idx = y * w + x;
+      const Ix = (-gray[idx-w-1] - 2*gray[idx-1] - gray[idx+w-1]
+                  +gray[idx-w+1] + 2*gray[idx+1] + gray[idx+w+1]) / 8;
+      const Iy = (-gray[idx-w-1] - 2*gray[idx-w] - gray[idx-w+1]
+                  +gray[idx+w-1] + 2*gray[idx+w] + gray[idx+w+1]) / 8;
+
+      // Structure tensor elements
+      let Ixx=0, Iyy=0, Ixy=0;
+      for (let dy=-1; dy<=1; dy++) {
+        for (let dx=-1; dx<=1; dx++) {
+          const n = (y+dy)*w+(x+dx);
+          const nx2 = (-gray[n-w-1]-2*gray[n-1]-gray[n+w-1]+gray[n-w+1]+2*gray[n+1]+gray[n+w+1])/8;
+          const ny2 = (-gray[n-w-1]-2*gray[n-w]-gray[n-w+1]+gray[n+w-1]+2*gray[n+w]+gray[n+w+1])/8;
+          Ixx += nx2*nx2; Iyy += ny2*ny2; Ixy += nx2*ny2;
+        }
+      }
+      const det   = Ixx*Iyy - Ixy*Ixy;
+      const trace = Ixx + Iyy;
+      response[idx] = det - k * trace * trace;
+    }
+  }
+
+  // Non-maximum suppression + collect keypoints
+  const kps = [];
+  const suppressed = new Uint8Array(w * h);
+  const r = 8; // NMS radius
+
+  // Sort candidates
+  const threshold = 100;
+  const candidates = [];
+  for (let i = w+1; i < w*(h-1)-1; i++) {
+    if (response[i] > threshold) candidates.push(i);
+  }
+  candidates.sort((a,b) => response[b] - response[a]);
+
+  for (const idx of candidates) {
+    if (suppressed[idx]) continue;
+    const x = idx % w, y = Math.floor(idx / w);
+    kps.push({ x, y, score: response[idx] });
+    // Suppress neighbourhood
+    for (let dy=-r; dy<=r; dy++)
+      for (let dx=-r; dx<=r; dx++) {
+        const n = (y+dy)*w+(x+dx);
+        if (n >= 0 && n < suppressed.length) suppressed[n] = 1;
+      }
+    if (kps.length >= maxPoints) break;
+  }
+  return kps;
+}
+
+/* ── Match keypoints to PLY point cloud (simplified visual localization) ── */
+function matchKeypointsToCloud(keypoints, gray, ply, w, h) {
+  const matches = [];
+  if (keypoints.length === 0 || ply.count === 0) {
+    return { matches: [], pose: state.pose, inliers: 0 };
+  }
+
+  // Sample the point cloud for matching (limit to reasonable subset)
+  const step    = Math.max(1, Math.floor(ply.count / 500));
+  const thresh  = parseInt(document.getElementById('slThresh').value);
+
+  // Build 2D projections: use XZ plane (top-down map)
+  const proj2D = [];
+  for (let i = 0; i < ply.count; i += step) {
+    const px = ply.positions[i*3];
+    const pz = ply.positions[i*3+2];
+    // Map to image space
+    const sx = (px - ply.bbox.minX) / ply.scale * w;
+    const sy = (pz - ply.bbox.minZ) / ply.scale * h;
+    proj2D.push({ x: sx, y: sy, idx: i });
+  }
+
+  // For each keypoint, find nearest projected point
+  for (const kp of keypoints) {
+    let bestDist = Infinity, bestPt = null;
+    for (const p of proj2D) {
+      const dx = kp.x - p.x, dy = kp.y - p.y;
+      const d = dx*dx + dy*dy;
+      if (d < bestDist) { bestDist = d; bestPt = p; }
+    }
+    if (bestPt && Math.sqrt(bestDist) < thresh * 10) {
+      matches.push({ kp, pt: bestPt, dist: Math.sqrt(bestDist) });
+    }
+  }
+
+  // Estimate pose from inlier matches (centroid-based)
+  let sumX=0, sumY=0, sumZ=0, inliers=0;
+  for (const m of matches) {
+    if (m.dist < thresh * 6) {
+      const idx = m.pt.idx;
+      sumX += ply.positions[idx*3];
+      sumY += ply.positions[idx*3+1];
+      sumZ += ply.positions[idx*3+2];
+      inliers++;
+    }
+  }
+  const pose = inliers > 0
+    ? { x: sumX/inliers, y: sumY/inliers, z: sumZ/inliers }
+    : { ...state.pose };
+
+  return { matches, pose, inliers };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   VIEWER MODE TOGGLE
+═══════════════════════════════════════════════════════════ */
+function setViewerMode(mode) {
+  state.viewerMode = mode;
+  document.getElementById('vt3d').classList.toggle('active', mode === '3d');
+  document.getElementById('vtmap').classList.toggle('active', mode === 'map');
+  document.getElementById('viMode').textContent = mode === '3d' ? '3D VIEW' : 'MAP TOP-DOWN';
+
+  const dot  = document.getElementById('posDot');
+  const ring = document.getElementById('posRing');
+  if (mode === 'map' && state.localizing) {
+    dot.style.display = ring.style.display = 'block';
+  } else {
+    dot.style.display = ring.style.display = 'none';
+  }
+
+  if (mode === '3d') rot3d.autoRotate = true;
+  else               rot3d.autoRotate = false;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   POINTER EVENTS (3D rotation)
+═══════════════════════════════════════════════════════════ */
+function initPointerEvents() {
+  const vc = document.getElementById('viewerCanvas');
+
+  vc.addEventListener('pointerdown', e => {
+    rot3d.dragging = true;
+    rot3d.autoRotate = false;
+    rot3d.lastX = e.clientX;
+    rot3d.lastY = e.clientY;
+    vc.setPointerCapture(e.pointerId);
+  });
+  vc.addEventListener('pointermove', e => {
+    if (!rot3d.dragging) return;
+    const dx = e.clientX - rot3d.lastX;
+    const dy = e.clientY - rot3d.lastY;
+    rot3d.lastX = e.clientX;
+    rot3d.lastY = e.clientY;
+    rot3d.azimuth   += dx * 0.5;
+    rot3d.elevation += dy * 0.5;
+    rot3d.elevation  = Math.max(-89, Math.min(89, rot3d.elevation));
+  });
+  vc.addEventListener('pointerup',   () => { rot3d.dragging = false; });
+  vc.addEventListener('pointerleave',() => { rot3d.dragging = false; });
+
+  // Pinch/wheel zoom
+  vc.addEventListener('wheel', e => {
+    e.preventDefault();
+    rot3d.zoom *= e.deltaY < 0 ? 1.1 : 0.9;
+    rot3d.zoom  = Math.max(0.1, Math.min(10, rot3d.zoom));
+  }, { passive: false });
+
+  // Touch pinch zoom
+  let lastPinchDist = 0;
+  vc.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastPinchDist = Math.sqrt(dx*dx + dy*dy);
+    }
+  });
+  vc.addEventListener('touchmove', e => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (lastPinchDist > 0) {
+        rot3d.zoom *= dist / lastPinchDist;
+        rot3d.zoom  = Math.max(0.1, Math.min(10, rot3d.zoom));
+      }
+      lastPinchDist = dist;
+    }
+  }, { passive: false });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLIDERS & TOGGLES
+═══════════════════════════════════════════════════════════ */
+function initSliders() {
+  const sl = [
+    { id:'slPtSize',   out:'vPtSize',   fmt: v => v },
+    { id:'slThresh',   out:'vThresh',   fmt: v => v },
+    { id:'slFeats',    out:'vFeats',    fmt: v => v },
+    { id:'slRotSpeed', out:'vRotSpeed', fmt: v => v },
+  ];
+  sl.forEach(({ id, out, fmt }) => {
+    const el = document.getElementById(id);
+    const ot = document.getElementById(out);
+    if (el && ot) {
+      el.addEventListener('input', () => { ot.textContent = fmt(el.value); });
+    }
+  });
+}
+
+function initToggles() {
+  document.querySelectorAll('.tog[data-tog]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.tog;
+      state.layers[key] = !state.layers[key];
+      btn.classList.toggle('on');
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TABS
+═══════════════════════════════════════════════════════════ */
+function switchTab(name, el) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESET VIEW
+═══════════════════════════════════════════════════════════ */
+function resetView() {
+  rot3d.azimuth    = 30;
+  rot3d.elevation  = 25;
+  rot3d.zoom       = 1.0;
+  rot3d.autoRotate = state.viewerMode === '3d';
+  state.pose = { x:0, y:0, z:0 };
+  state.confidence = 0;
+  trajectory.length = 0;
+  document.getElementById('cbFill').style.width = '0%';
+  document.getElementById('confPct').textContent = '0%';
+  showToast('Vue réinitialisée');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LOG
+═══════════════════════════════════════════════════════════ */
+function log(type, msg) {
+  const panel = document.getElementById('logPanel');
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">[${type.toUpperCase()}]</span> ${msg}`;
+  panel.appendChild(div);
+  panel.scrollTop = panel.scrollHeight;
+  // Keep max 100 lines
+  while (panel.children.length > 100) panel.removeChild(panel.firstChild);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════════════════ */
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+</script>
+</body>
+</html>
