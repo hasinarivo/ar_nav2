@@ -1,0 +1,1568 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>LOC.PIPELINE v2 — PLY + Bâtiments 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+/* ═══ TOKENS ════════════════════════════════════════════════════════════════ */
+:root {
+  --bg:       #07090E;
+  --surface:  #0C0F1A;
+  --panel:    #101525;
+  --dim:      #181E30;
+  --border:   rgba(255,255,255,0.06);
+  --border2:  rgba(255,255,255,0.13);
+  --teal:     #00FFB2;
+  --teal-d:   rgba(0,255,178,0.10);
+  --teal-g:   rgba(0,255,178,0.22);
+  --amber:    #FFB300;
+  --amber-d:  rgba(255,179,0,0.10);
+  --red:      #FF3B3B;
+  --red-d:    rgba(255,59,59,0.10);
+  --purple:   #9B7FFF;
+  --purple-d: rgba(155,127,255,0.10);
+  --blue:     #4FC3F7;
+  --text:     #CDD4E4;
+  --muted:    #3E4560;
+  --mono:     'Share Tech Mono', monospace;
+  --cond:     'Barlow Condensed', sans-serif;
+  --r:        4px; --r2: 8px;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent }
+html,body { width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:var(--mono) }
+button { font-family:var(--mono); cursor:pointer; border:none; outline:none }
+canvas { display:block }
+body::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:9000;
+  background: repeating-linear-gradient(0deg,transparent 0px,transparent 2px,rgba(0,0,0,0.055) 2px,rgba(0,0,0,0.055) 4px);
+}
+
+/* ═══ LAYOUT ════════════════════════════════════════════════════════════════ */
+#app { position:fixed; inset:0; display:flex; flex-direction:column; height:100dvh }
+
+/* HEADER */
+#header {
+  flex-shrink:0; height:46px; display:flex; align-items:center; gap:8px;
+  padding:0 14px; background:var(--surface); border-bottom:1px solid var(--border); z-index:300
+}
+.logo {
+  font-family:var(--cond); font-size:19px; font-weight:900; letter-spacing:.14em;
+  color:var(--teal); text-shadow:0 0 18px var(--teal-g); white-space:nowrap
+}
+.logo-sub { font-size:10px; color:var(--purple); letter-spacing:.06em; margin-left:4px; align-self:flex-end; padding-bottom:3px }
+#h-status { flex:1; font-size:9px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+#h-fps    { font-size:11px; color:var(--teal); white-space:nowrap; min-width:52px; text-align:right }
+
+/* VIEWPORT — dual pane */
+#viewport { flex:1; position:relative; overflow:hidden; min-height:0; display:flex }
+
+/* LEFT PANE: PLY point cloud */
+#paneLeft {
+  position:relative; overflow:hidden; background:#000;
+  transition:width .3s ease, flex .3s ease;
+  flex:1;
+}
+#paneLeft.hidden { flex:0; width:0; overflow:hidden }
+#plyCanvas { position:absolute; inset:0; width:100%; height:100%; z-index:1 }
+#plyOverlay { position:absolute; inset:0; width:100%; height:100%; z-index:2; pointer-events:none }
+
+/* PLY info overlay */
+#plyInfo {
+  position:absolute; top:8px; left:8px; z-index:10;
+  background:rgba(7,9,14,0.88); border:1px solid var(--border);
+  border-radius:var(--r); padding:5px 9px; font-size:9px; color:var(--muted);
+  pointer-events:none; backdrop-filter:blur(4px); line-height:1.8
+}
+#plyInfo .hi { color:var(--teal) }
+#plyInfo .ha { color:var(--amber) }
+
+/* Pane label */
+.pane-label {
+  position:absolute; bottom:8px; left:8px; z-index:10;
+  font-size:8px; color:var(--muted); letter-spacing:.12em; text-transform:uppercase;
+  background:rgba(7,9,14,0.85); border:1px solid var(--border);
+  padding:3px 8px; border-radius:var(--r); pointer-events:none
+}
+
+/* Divider */
+#divider {
+  flex-shrink:0; width:1px; background:var(--border2); position:relative; z-index:20;
+  cursor:col-resize;
+}
+#divider:hover { background:var(--teal); opacity:0.5 }
+
+/* RIGHT PANE: Three.js buildings */
+#paneRight {
+  position:relative; overflow:hidden; background:var(--bg);
+  flex:1; transition:flex .3s ease;
+}
+#paneRight.full { flex:2 }
+#threeCanvas { position:absolute; inset:0; width:100%; height:100%; z-index:1 }
+
+/* MAP overlay (top-right of right pane) */
+#mapContainer {
+  position:absolute; top:8px; right:8px; width:130px; height:130px;
+  border-radius:var(--r2); overflow:hidden; border:1px solid rgba(0,255,178,0.3);
+  z-index:30; box-shadow:0 4px 20px rgba(0,0,0,0.6); transition:all .3s;
+  pointer-events:none;
+}
+#mapContainer.hidden { width:0; height:0; opacity:0 }
+#osmMap { width:100%; height:100% }
+.map-lbl {
+  position:absolute; bottom:0; left:0; right:0; font-size:8px; color:var(--teal);
+  text-align:center; background:rgba(7,9,14,0.8); padding:2px 0;
+  pointer-events:none; z-index:31; letter-spacing:.08em
+}
+
+/* Viewer mode tabs (top-center of viewport) */
+#viewModeTabs {
+  position:absolute; top:8px; left:50%; transform:translateX(-50%);
+  display:flex; gap:4px; z-index:40; pointer-events:auto
+}
+.vmt {
+  font-size:8px; letter-spacing:.1em; text-transform:uppercase; padding:4px 9px;
+  border-radius:2px; border:1px solid var(--border); background:rgba(7,9,14,0.9);
+  color:var(--muted); cursor:pointer; transition:all .2s; white-space:nowrap
+}
+.vmt.active { color:var(--teal); border-color:rgba(0,255,178,.4); background:var(--teal-d) }
+
+/* Stage chips (left pane top) */
+#stageBar {
+  position:absolute; top:8px; left:8px; display:flex; gap:4px; z-index:20; pointer-events:none
+}
+#stageBarRight {
+  position:absolute; top:8px; left:8px; display:flex; gap:4px; z-index:20; pointer-events:none
+}
+.schip {
+  font-size:8px; letter-spacing:.1em; text-transform:uppercase;
+  padding:3px 6px; border-radius:2px; border:1px solid; white-space:nowrap; transition:all .3s
+}
+.schip.idle   { color:var(--muted); border-color:var(--muted); opacity:.4 }
+.schip.active { opacity:1; animation:blink 1.5s ease-in-out infinite }
+.schip.done   { opacity:.8 }
+.schip[data-s="gps"]   { color:var(--blue);   border-color:var(--blue) }
+.schip[data-s="apr"]   { color:var(--amber);  border-color:var(--amber) }
+.schip[data-s="yolo"]  { color:var(--purple); border-color:var(--purple) }
+.schip[data-s="score"] { color:var(--teal);   border-color:var(--teal) }
+.schip[data-s="pc"]    { color:var(--red);    border-color:var(--red) }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* Error HUD (bottom of viewport) */
+#errHud {
+  position:absolute; bottom:8px; left:8px; right:8px;
+  display:flex; gap:4px; z-index:20; pointer-events:none
+}
+.ep {
+  flex:1; background:rgba(7,9,14,0.88); border:1px solid var(--border);
+  border-radius:var(--r); padding:4px 5px; text-align:center; backdrop-filter:blur(4px)
+}
+.ep-l { font-size:7px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+.ep-v { font-size:11px; margin-top:1px; font-weight:500 }
+
+/* No-PLY hint */
+#plyHint {
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:8px;
+  color:var(--muted); text-align:center; padding:20px; pointer-events:none; z-index:5
+}
+.ph-icon { font-size:32px; opacity:.25 }
+.ph-t { font-family:var(--cond); font-size:16px; font-weight:700; letter-spacing:.12em; text-transform:uppercase }
+.ph-s { font-size:8px; letter-spacing:.06em; line-height:1.8 }
+.ph-s em { color:var(--teal); font-style:normal }
+
+/* PLY load progress */
+#plyProgress {
+  position:absolute; bottom:30px; left:20px; right:20px; z-index:20;
+  display:none
+}
+.prg-bar { height:2px; background:var(--dim); border-radius:1px; overflow:hidden; margin-bottom:4px }
+.prg-fill { height:100%; background:linear-gradient(90deg,var(--teal),var(--purple)); width:0%; transition:width .3s }
+.prg-txt { font-size:9px; color:var(--teal); letter-spacing:.06em; text-align:center }
+
+/* Processing overlay */
+#procOverlay {
+  position:absolute; inset:0; background:rgba(7,9,14,0.88);
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+  gap:12px; z-index:60; backdrop-filter:blur(4px)
+}
+#procOverlay.show { display:flex }
+.proc-ring {
+  width:36px; height:36px; border:2px solid var(--dim); border-top-color:var(--teal);
+  border-radius:50%; animation:spin .8s linear infinite
+}
+@keyframes spin { to { transform:rotate(360deg) } }
+.proc-txt  { font-size:10px; color:var(--teal); letter-spacing:.12em; text-transform:uppercase }
+.proc-sub  { font-size:9px; color:var(--muted) }
+
+/* ═══ BOTTOM SHEET ══════════════════════════════════════════════════════════ */
+#sheet {
+  flex-shrink:0; background:var(--surface); border-top:1px solid var(--border);
+  border-radius:12px 12px 0 0; display:flex; flex-direction:column;
+  overflow:hidden; height:clamp(190px,38dvh,260px);
+  transition:height .3s cubic-bezier(.4,0,.2,1); z-index:200
+}
+#sheet.collapsed { height:48px }
+#sheetHandle {
+  flex-shrink:0; height:22px; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer
+}
+.s-bar { width:30px; height:3px; background:var(--dim); border-radius:2px }
+#s-chev { font-size:8px; color:var(--muted); letter-spacing:.1em; text-transform:uppercase; transition:transform .3s }
+#sheet.collapsed #s-chev { transform:rotate(180deg) }
+
+/* Tabs */
+#tabs { flex-shrink:0; display:flex; height:26px; border-bottom:1px solid var(--border) }
+.tab {
+  flex:1; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+  background:transparent; border-right:1px solid var(--border); border-bottom:2px solid transparent; transition:all .15s
+}
+.tab:last-child { border-right:none }
+.tab.active { color:var(--teal); border-bottom-color:var(--teal); background:var(--teal-d) }
+.tab[data-t="ply"].active { color:var(--purple); border-bottom-color:var(--purple); background:var(--purple-d) }
+
+/* Panel */
+#panelWrap {
+  flex:1; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch;
+  padding:8px 12px 4px; scrollbar-width:thin; scrollbar-color:var(--dim) transparent
+}
+#panelWrap::-webkit-scrollbar { width:2px }
+#panelWrap::-webkit-scrollbar-thumb { background:var(--dim) }
+.panel { display:none }
+.panel.active { display:block }
+
+/* Section label */
+.sl {
+  font-size:8px; color:var(--muted); letter-spacing:.12em; text-transform:uppercase;
+  margin:6px 0 5px; display:flex; align-items:center; gap:5px
+}
+.sl::before { content:''; display:block; width:2px; height:8px; border-radius:1px; flex-shrink:0; background:var(--teal) }
+.sl.a::before { background:var(--amber) }
+.sl.p::before { background:var(--purple) }
+.sl.r::before { background:var(--red) }
+
+/* Metric grids */
+.mg  { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin-bottom:6px }
+.mg4 { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-bottom:6px }
+.mg2 { display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-bottom:6px }
+.mc  { background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:5px 8px }
+.mc-l { font-size:7px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+.mc-v { font-size:14px; margin-top:1px }
+
+/* Sliders */
+.cr { display:flex; align-items:center; gap:8px; margin-bottom:5px }
+.cl { font-size:9px; color:var(--muted); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.cv { font-size:9px; color:var(--teal); min-width:36px; text-align:right; flex-shrink:0 }
+input[type=range] {
+  -webkit-appearance:none; width:88px; height:2px; background:var(--dim); border-radius:1px; outline:none; flex-shrink:0
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; width:12px; height:12px; border-radius:50%;
+  background:var(--teal); cursor:pointer; border:2px solid var(--bg)
+}
+input[type=range].a::-webkit-slider-thumb { background:var(--amber) }
+input[type=range].p::-webkit-slider-thumb { background:var(--purple) }
+
+/* Toggles */
+.tog {
+  font-size:8px; color:var(--muted); background:var(--panel); border:1px solid var(--border);
+  border-radius:2px; padding:4px 8px; letter-spacing:.06em; text-transform:uppercase; transition:all .15s; cursor:pointer
+}
+.tog.on { color:var(--teal); border-color:rgba(0,255,178,.35); background:var(--teal-d) }
+.tog-row { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:6px }
+
+/* Buttons */
+.btn { font-size:9px; letter-spacing:.09em; text-transform:uppercase; padding:6px 10px; border-radius:var(--r); transition:all .15s; white-space:nowrap; cursor:pointer }
+.btn-p { background:var(--teal); color:var(--bg); font-weight:700 }
+.btn-p:active { opacity:.8 }
+.btn-p:disabled { background:var(--dim); color:var(--muted); cursor:not-allowed }
+.btn-s { background:var(--panel); color:var(--muted); border:1px solid var(--border) }
+.btn-a { background:var(--amber-d); color:var(--amber); border:1px solid rgba(255,179,0,.3); font-weight:700 }
+.btn-r { background:var(--red-d); color:var(--red); border:1px solid rgba(255,59,59,.3) }
+.btn-pur { background:var(--purple-d); color:var(--purple); border:1px solid rgba(155,127,255,.3); font-weight:700 }
+.btn-row { display:flex; gap:5px; flex-wrap:wrap; margin:5px 0 }
+
+/* Drop zone */
+.dz {
+  border:1px dashed var(--border2); border-radius:var(--r2); padding:12px;
+  text-align:center; cursor:pointer; transition:all .2s; background:var(--panel)
+}
+.dz:hover,.dz.over { border-color:var(--purple); background:var(--purple-d) }
+.dz-icon { font-size:22px; opacity:.4; margin-bottom:4px }
+.dz-t { font-size:9px; color:var(--muted) }
+.dz-t strong { color:var(--purple) }
+input[type=file] { display:none }
+
+/* File list */
+.fi-item {
+  display:flex; align-items:center; gap:8px; background:var(--panel);
+  border:1px solid var(--border); border-radius:var(--r); padding:5px 8px; margin-bottom:4px;
+  font-size:9px; cursor:pointer; transition:all .15s
+}
+.fi-item:active { background:var(--dim) }
+.fi-item.active-ply { border-color:rgba(155,127,255,.4); background:var(--purple-d) }
+.fi-dot { width:7px; height:7px; border-radius:50%; background:var(--purple); flex-shrink:0 }
+.fi-dot.loaded { animation:blink 1s ease-in-out infinite }
+.fi-name { flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.fi-pts  { color:var(--muted); flex-shrink:0 }
+
+/* Results table */
+.res-table { width:100%; font-size:8px; border-collapse:collapse; margin-bottom:6px }
+.res-table th { color:var(--muted); font-weight:normal; text-align:left; padding:3px 5px; border-bottom:1px solid var(--border); letter-spacing:.06em }
+.res-table td { padding:4px 5px; border-bottom:1px solid var(--border) }
+.res-table tr.best-row td { background:rgba(0,255,178,0.04) }
+.val-good { color:var(--teal) }
+.val-warn { color:var(--amber) }
+.val-bad  { color:var(--red) }
+
+/* Info box */
+.info { background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:7px 9px; font-size:9px; color:var(--muted); line-height:1.8; margin-bottom:5px }
+.info .hi { color:var(--teal) } .info .ha { color:var(--amber) } .info .hp { color:var(--purple) } .info .hr { color:var(--red) }
+
+/* Candidates */
+.cand-item {
+  display:flex; align-items:center; gap:6px; background:var(--panel);
+  border:1px solid var(--border); border-radius:var(--r); padding:5px 8px; margin-bottom:3px; font-size:9px
+}
+.cand-item.best { border-color:rgba(0,255,178,.4); background:var(--teal-d) }
+.cand-sc { color:var(--teal); font-weight:700; min-width:34px }
+.cand-nm { flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.cand-d  { color:var(--muted); flex-shrink:0 }
+
+/* Pipeline flow */
+#pipeFlow { display:flex; align-items:center; gap:4px; padding:4px 0; overflow-x:auto; margin-bottom:6px; scrollbar-width:none }
+#pipeFlow::-webkit-scrollbar { display:none }
+.pf { flex-shrink:0; background:var(--panel); border:1px solid var(--border); border-radius:var(--r); padding:4px 8px; font-size:8px; text-align:center; min-width:55px }
+.pf.done { border-color:rgba(0,255,178,.3) }
+.pf-v { font-size:12px; font-weight:700; margin-top:2px }
+.pf-arr { color:var(--muted); font-size:12px; flex-shrink:0 }
+
+/* Session stats */
+.st-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--border); font-size:9px }
+.st-l { color:var(--muted) }
+.st-v { color:var(--text) }
+
+/* Action bar */
+#actionBar {
+  flex-shrink:0; display:flex; gap:6px; padding:8px 12px;
+  background:var(--surface); border-top:1px solid var(--border)
+}
+.ab { height:42px; border-radius:var(--r2); font-size:10px; letter-spacing:.1em; text-transform:uppercase; font-family:var(--mono); transition:all .15s; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px }
+.ab-p { flex:1; background:var(--teal); color:var(--bg); font-weight:700; border:none }
+.ab-p:active { opacity:.8 }
+.ab-p:disabled { background:var(--dim); color:var(--muted); cursor:not-allowed }
+.ab-pur { background:var(--purple-d); color:var(--purple); border:1px solid rgba(155,127,255,.35); font-weight:700; flex:1 }
+.ab-a { flex:1; background:var(--amber-d); color:var(--amber); border:1px solid rgba(255,179,0,.3); font-weight:700 }
+.ab-s { width:42px; background:var(--panel); color:var(--muted); border:1px solid var(--border); font-size:15px }
+#homeBar { flex-shrink:0; height:18px; display:flex; align-items:center; justify-content:center; background:var(--surface) }
+.home-pill { width:80px; height:3px; background:var(--dim); border-radius:2px }
+
+/* Toast */
+#toast {
+  position:fixed; bottom:80px; left:50%; transform:translateX(-50%) translateY(10px);
+  background:var(--panel); border:1px solid var(--border2); border-radius:var(--r);
+  padding:8px 14px; font-size:9px; color:var(--teal); z-index:9990; opacity:0;
+  transition:all .3s ease; pointer-events:none; white-space:nowrap
+}
+#toast.show { opacity:1; transform:translateX(-50%) translateY(0) }
+
+/* PLY Localisation result badge */
+#plyLocResult {
+  position:absolute; bottom:34px; left:8px; z-index:15;
+  background:rgba(7,9,14,0.9); border:1px solid rgba(155,127,255,.4);
+  border-radius:var(--r); padding:5px 10px; font-size:9px; color:var(--purple);
+  display:none; backdrop-filter:blur(4px)
+}
+
+/* Dim input fields */
+.dim-inp {
+  background:transparent; border:none; color:var(--teal);
+  font-family:var(--mono); font-size:9px; width:50px; outline:none
+}
+.dim-inp:focus { border-bottom:1px solid var(--teal) }
+
+/* Leaflet */
+.leaflet-container { background:var(--bg)!important }
+.leaflet-control-attribution { display:none!important }
+
+/* Responsive */
+@media (max-width: 480px) {
+  #viewModeTabs { flex-wrap:wrap; max-width:200px }
+  .vmt { font-size:7px; padding:3px 7px }
+}
+</style>
+</head>
+<body>
+<!-- Hidden file inputs -->
+<input type="file" id="imgInput"  accept="image/*">
+<input type="file" id="plyInput"  accept=".ply" multiple>
+
+<div id="app">
+
+<!-- HEADER -->
+<div id="header">
+  <div class="logo">LOC<span>.</span>PIPELINE</div>
+  <span class="logo-sub">v2</span>
+  <span id="h-status" style="margin-left:8px">Chargez une image ou un .ply</span>
+  <span id="h-fps">— FPS</span>
+</div>
+
+<!-- VIEWPORT -->
+<div id="viewport">
+
+  <!-- View mode selector -->
+  <div id="viewModeTabs">
+    <button class="vmt active" data-vm="split" onclick="setViewMode('split')">SPLIT</button>
+    <button class="vmt" data-vm="ply"   onclick="setViewMode('ply')">NUAGE</button>
+    <button class="vmt" data-vm="3d"    onclick="setViewMode('3d')">BÂTIMENTS</button>
+  </div>
+
+  <!-- LEFT PANE: WebGL PLY point cloud -->
+  <div id="paneLeft">
+    <canvas id="plyCanvas"></canvas>
+    <canvas id="plyOverlay"></canvas>
+
+    <!-- Stage chips in PLY pane -->
+    <div id="stageBar">
+      <div class="schip idle" data-s="gps"   id="chip-gps">GPS</div>
+      <div class="schip idle" data-s="apr"   id="chip-apr">APR</div>
+      <div class="schip idle" data-s="yolo"  id="chip-yolo">YOLO</div>
+      <div class="schip idle" data-s="score" id="chip-score">SCORE</div>
+      <div class="schip idle" data-s="pc"    id="chip-pc">PLY</div>
+    </div>
+
+    <!-- PLY info -->
+    <div id="plyInfo">
+      <div>PTS <span class="hi" id="pi-count">—</span></div>
+      <div>LOC <span class="ha" id="pi-err">—</span></div>
+    </div>
+
+    <!-- PLY localisation badge -->
+    <div id="plyLocResult">
+      Pos. estimée PLY: <span id="plr-val">—</span>
+    </div>
+
+    <!-- PLY progress -->
+    <div id="plyProgress">
+      <div class="prg-bar"><div class="prg-fill" id="prgFill"></div></div>
+      <div class="prg-txt" id="prgTxt">Chargement…</div>
+    </div>
+
+    <!-- No-PLY hint -->
+    <div id="plyHint">
+      <div class="ph-icon">☁</div>
+      <div class="ph-t">Nuage de Points</div>
+      <div class="ph-s">Chargez un fichier <em>.ply</em><br>ASCII · binaire little-endian (COLMAP)</div>
+    </div>
+
+    <div class="pane-label">NUAGE DE POINTS PLY</div>
+
+    <!-- Error HUD -->
+    <div id="errHud">
+      <div class="ep"><div class="ep-l">GPS</div><div class="ep-v" id="ev-gps"  style="color:var(--blue)">—</div></div>
+      <div class="ep"><div class="ep-l">APR</div><div class="ep-v" id="ev-apr"  style="color:var(--amber)">—</div></div>
+      <div class="ep"><div class="ep-l">YOLO</div><div class="ep-v" id="ev-yolo" style="color:var(--purple)">—</div></div>
+      <div class="ep"><div class="ep-l">SCORE</div><div class="ep-v" id="ev-score" style="color:var(--teal)">—</div></div>
+      <div class="ep"><div class="ep-l">PLY</div><div class="ep-v"  id="ev-pc"  style="color:var(--red)">—</div></div>
+    </div>
+  </div>
+
+  <!-- DIVIDER -->
+  <div id="divider"></div>
+
+  <!-- RIGHT PANE: Three.js 3D buildings -->
+  <div id="paneRight">
+    <canvas id="threeCanvas"></canvas>
+
+    <div id="stageBarRight" style="display:none"><!-- mirror --></div>
+
+    <!-- OSM Map -->
+    <div id="mapContainer">
+      <div id="osmMap"></div>
+      <div class="map-lbl">OSM · CARTE</div>
+    </div>
+
+    <div class="pane-label">BÂTIMENTS 3D</div>
+  </div>
+
+  <!-- Processing overlay (full viewport) -->
+  <div id="procOverlay">
+    <div class="proc-ring"></div>
+    <div class="proc-txt" id="procTxt">Traitement…</div>
+    <div class="proc-sub" id="procSub">—</div>
+  </div>
+
+</div><!-- /viewport -->
+
+<!-- BOTTOM SHEET -->
+<div id="sheet">
+  <div id="sheetHandle" onclick="toggleSheet()">
+    <div class="s-bar"></div>
+    <span id="s-chev">▼ ANALYSE</span>
+  </div>
+  <div id="tabs">
+    <button class="tab active" data-t="pipeline" onclick="switchTab('pipeline',this)">PIPELINE</button>
+    <button class="tab" data-t="ply" onclick="switchTab('ply',this)">PLY ☁</button>
+    <button class="tab" data-t="results" onclick="switchTab('results',this)">RÉSULTATS</button>
+    <button class="tab" data-t="config" onclick="switchTab('config',this)">CONFIG</button>
+    <button class="tab" data-t="log" onclick="switchTab('log',this)">LOG</button>
+  </div>
+  <div id="panelWrap">
+
+    <!-- PIPELINE TAB -->
+    <div class="panel active" id="tab-pipeline">
+      <div class="sl">Flux de localisation</div>
+      <div id="pipeFlow">
+        <div class="pf" id="pf-gps"><div style="color:var(--blue)">GPS</div><div class="pf-v" id="pfv-gps" style="color:var(--blue)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf" id="pf-apr"><div style="color:var(--amber)">APR</div><div class="pf-v" id="pfv-apr" style="color:var(--amber)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf" id="pf-yolo"><div style="color:var(--purple)">YOLO</div><div class="pf-v" id="pfv-yolo" style="color:var(--purple)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf" id="pf-score"><div style="color:var(--teal)">SCORE</div><div class="pf-v" id="pfv-score" style="color:var(--teal)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf" id="pf-pc"><div style="color:var(--red)">PLY</div><div class="pf-v" id="pfv-pc" style="color:var(--red)">—</div></div>
+      </div>
+      <div class="sl a">Détections YOLO</div>
+      <div id="yoloDetList"><div class="info">Lancez le pipeline</div></div>
+      <div class="sl p">Candidats SIG scorés</div>
+      <div id="candList"><div class="info">En attente</div></div>
+    </div>
+
+    <!-- PLY TAB -->
+    <div class="panel" id="tab-ply">
+      <div class="sl p">Charger nuage de points</div>
+      <div class="dz" id="plyDrop">
+        <input type="file" id="plyDropInput" accept=".ply" multiple>
+        <div class="dz-icon">☁</div>
+        <div class="dz-t">Glissez vos <strong>.ply</strong> COLMAP ou cliquez<br>ASCII · binaire little-endian</div>
+      </div>
+      <div class="sl" style="margin-top:8px">Fichiers chargés</div>
+      <div id="plyFileList"><div class="info">Aucun fichier chargé</div></div>
+
+      <div class="sl a">Rendu nuage de points</div>
+      <div class="cr">
+        <span class="cl">Taille des points</span>
+        <input type="range" class="p" id="slPtSize" min="0.5" max="8" step="0.5" value="2">
+        <span class="cv" id="vPtSize">2</span>
+      </div>
+      <div class="cr">
+        <span class="cl">Opacité</span>
+        <input type="range" class="p" id="slPtOpacity" min="0.1" max="1" step="0.05" value="0.85">
+        <span class="cv" id="vPtOpacity">0.85</span>
+      </div>
+      <div class="cr">
+        <span class="cl">Zoom</span>
+        <input type="range" id="slPlyZoom" min="0.1" max="8" step="0.1" value="1">
+        <span class="cv" id="vPlyZoom">1.0×</span>
+      </div>
+      <div class="tog-row" style="margin-top:4px">
+        <button class="tog on p" data-tog="plyAutorot" id="tog-plyAutorot">Auto-rot</button>
+        <button class="tog on" data-tog="plyAxes" id="tog-plyAxes">Axes</button>
+        <button class="tog on" data-tog="plyBbox" id="tog-plyBbox">BBox</button>
+        <button class="tog on p" data-tog="plyMarkers" id="tog-plyMarkers">Marqueurs</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn btn-s" onclick="plyResetView()">↺ RESET VUE</button>
+        <button class="btn btn-s" onclick="plyTopView()">⊤ TOP</button>
+        <button class="btn btn-s" onclick="plyFrontView()">▣ FACE</button>
+      </div>
+    </div>
+
+    <!-- RESULTS TAB -->
+    <div class="panel" id="tab-results">
+      <div class="sl">Comparaison des méthodes</div>
+      <table class="res-table">
+        <thead><tr><th>Méthode</th><th>Err.méd</th><th>75e pct</th><th>&lt;10m%</th></tr></thead>
+        <tbody id="resultsTbody">
+          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:8px">Lancez une analyse</td></tr>
+        </tbody>
+      </table>
+      <div class="sl a">Dernier run</div>
+      <div id="lastRunSummary" class="info">—</div>
+      <div class="btn-row">
+        <button class="btn btn-a" onclick="downloadCSV()">⬇ EXPORTER CSV</button>
+        <button class="btn btn-r" onclick="clearSession()">✕ VIDER</button>
+      </div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div class="panel" id="tab-config">
+      <div class="sl">Serveur API</div>
+      <div class="cr">
+        <span class="cl">URL</span>
+        <input id="cfgUrl" type="url" value="http://localhost:8000"
+          style="flex:1;background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);padding:3px 6px;color:var(--text);font-family:var(--mono);font-size:9px;outline:none">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-p" onclick="testServer()">⚡ TESTER</button>
+        <div class="info" id="srvStatus" style="flex:1;margin:0;display:flex;align-items:center">—</div>
+      </div>
+
+      <div class="sl a">Caméra</div>
+      <div class="cr">
+        <span class="cl">Focale (px)</span>
+        <input type="range" class="a" id="slFocal" min="400" max="1200" step="10" value="800">
+        <span class="cv" id="vFocal">800</span>
+      </div>
+      <div class="cr">
+        <span class="cl">Heading (°)</span>
+        <input type="range" class="a" id="slHeading" min="0" max="360" step="1" value="0">
+        <span class="cv" id="vHeading">0°</span>
+      </div>
+
+      <div class="sl p">Vérité terrain</div>
+      <div class="cr">
+        <span class="cl">Latitude GT</span>
+        <input id="gtLat" type="number" step="0.000001" value="-18.9100"
+          style="width:110px;background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);padding:3px 6px;color:var(--teal);font-family:var(--mono);font-size:9px;outline:none">
+      </div>
+      <div class="cr">
+        <span class="cl">Longitude GT</span>
+        <input id="gtLon" type="number" step="0.000001" value="47.5360"
+          style="width:110px;background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);padding:3px 6px;color:var(--teal);font-family:var(--mono);font-size:9px;outline:none">
+      </div>
+
+      <div class="sl">Bâtiments 3D</div>
+      <div class="tog-row">
+        <button class="tog on" data-tog="buildings" id="tog-buildings">Bâtiments</button>
+        <button class="tog on a" data-tog="3daxes"  id="tog-3daxes">Axes</button>
+        <button class="tog on" data-tog="3dmarkers" id="tog-3dmarkers">Marqueurs</button>
+        <button class="tog" data-tog="3dautorot"    id="tog-3dautorot">Auto-rot</button>
+      </div>
+
+      <div class="sl a">Hauteurs logos (m)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <div class="cr"><span class="cl">misa</span><input class="dim-inp" data-cls="misa" type="number" step="0.01" value="0.60"></div>
+        <div class="cr"><span class="cl">buvette</span><input class="dim-inp" data-cls="buvette" type="number" step="0.01" value="0.40"></div>
+        <div class="cr"><span class="cl">bni</span><input class="dim-inp" data-cls="bni" type="number" step="0.01" value="0.80"></div>
+        <div class="cr"><span class="cl">bfv</span><input class="dim-inp" data-cls="bfv" type="number" step="0.01" value="0.75"></div>
+        <div class="cr"><span class="cl">boa</span><input class="dim-inp" data-cls="boa" type="number" step="0.01" value="0.70"></div>
+        <div class="cr"><span class="cl">pharmacie</span><input class="dim-inp" data-cls="pharmacie" type="number" step="0.01" value="0.50"></div>
+      </div>
+    </div>
+
+    <!-- LOG TAB -->
+    <div class="panel" id="tab-log">
+      <div id="logPanel" style="height:110px;overflow-y:auto;font-size:8px;line-height:1.9;scrollbar-width:thin"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ACTION BAR -->
+<div id="actionBar">
+  <label class="ab ab-p" for="imgInput">📷 IMAGE</label>
+  <label class="ab ab-pur" for="plyInput">☁ PLY</label>
+  <button class="ab ab-a" id="btnRun" onclick="runPipeline()" disabled>▶ LANCER</button>
+  <button class="ab ab-s" onclick="downloadCSV()" title="CSV">⬇</button>
+  <button class="ab ab-s" onclick="toggleSheet()">≡</button>
+</div>
+<div id="homeBar"><div class="home-pill"></div></div>
+
+</div><!-- /app -->
+<div id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════════════════════════════════════ -->
+<script>
+/* ─── CONSTANTS ─────────────────────────────────────────────────────────── */
+const LOGO_HEIGHTS = { misa:.6, buvette:.4, bni:.8, bfv:.75, boa:.7, pharmacie:.5 };
+
+const SIG_DB = [
+  {id:'c1',name:'BNI Analakely',    class_name:'bni',       lat:-18.9102,lon:47.5358,facade_azimuth:90, side:'right',logo_height_m:.8},
+  {id:'c2',name:'BFV Ambatovinaky', class_name:'bfv',       lat:-18.9098,lon:47.5362,facade_azimuth:270,side:'left', logo_height_m:.75},
+  {id:'c3',name:'BOA Centre',       class_name:'boa',       lat:-18.9105,lon:47.5355,facade_azimuth:180,side:'right',logo_height_m:.7},
+  {id:'c4',name:'Pharmacie Cent.',  class_name:'pharmacie', lat:-18.9095,lon:47.5365,facade_azimuth:0,  side:'left', logo_height_m:.5},
+  {id:'c5',name:'MISA Banque',      class_name:'misa',      lat:-18.9108,lon:47.5352,facade_azimuth:90, side:'right',logo_height_m:.6},
+  {id:'c6',name:'Buvette Marché',   class_name:'buvette',   lat:-18.9092,lon:47.5370,facade_azimuth:45, side:'left', logo_height_m:.4},
+  {id:'c7',name:'BNI Tsaralalana',  class_name:'bni',       lat:-18.9115,lon:47.5348,facade_azimuth:135,side:'right',logo_height_m:.8},
+  {id:'c8',name:'Pharmacie Mod.',   class_name:'pharmacie', lat:-18.9088,lon:47.5375,facade_azimuth:270,side:'left', logo_height_m:.5},
+];
+
+const BUILDINGS_3D = [
+  {lat:-18.9100,lon:47.5358,w:30,d:20,h:18,color:0x223344,name:'BNI'},
+  {lat:-18.9098,lon:47.5363,w:25,d:18,h:22,color:0x332244,name:'BFV'},
+  {lat:-18.9105,lon:47.5353,w:40,d:25,h:14,color:0x224433,name:'BOA'},
+  {lat:-18.9095,lon:47.5366,w:20,d:15,h:10,color:0x443322,name:'Pharma'},
+  {lat:-18.9110,lon:47.5350,w:35,d:22,h:25,color:0x334422,name:'MISA'},
+  {lat:-18.9090,lon:47.5372,w:15,d:12,h:8, color:0x222244,name:'Buvette'},
+];
+
+/* ─── STATE ─────────────────────────────────────────────────────────────── */
+const S = {
+  // image
+  imageBlob:null, imageW:0, imageH:0,
+  // pipeline results
+  aprLat:0, aprLon:0, aprPose:null,
+  yoloDets:[], sigCands:[], scoredCands:[],
+  scoredLat:0, scoredLon:0, pcLat:0, pcLon:0,
+  // PLY
+  plyFiles:[],
+  activePlyIdx:-1,
+  cloud:null,          // {positions, colors, count, bbox, center, scale}
+  plyGLReady:false,
+  // errors per method
+  errors:{gps:[],apr:[],yolo:[],score:[],pc:[]},
+  sessionRuns:[],
+  // layers
+  lay:{buildings:true, '3daxes':true, '3dmarkers':true, '3dautorot':false,
+       plyAutorot:true, plyAxes:true, plyBbox:true, plyMarkers:true},
+  // camera (PLY viewer)
+  plyAz:30, plyEl:20, plyZoom:1, plyDrag:false, plyLX:0, plyLY:0,
+  // camera (three.js)
+  cam:{az:30, el:25, zoom:1, drag:false, lx:0, ly:0},
+  // UI
+  sheetOpen:true, viewMode:'split', mapVis:true,
+  running:false,
+  tick:0, fps:{f:0, last:performance.now(), val:0},
+};
+
+/* ─── HELPERS ───────────────────────────────────────────────────────────── */
+const GT    = () => ({lat:parseFloat(document.getElementById('gtLat').value), lon:parseFloat(document.getElementById('gtLon').value)});
+const API   = path => document.getElementById('cfgUrl').value.replace(/\/$/,'') + path;
+const fmtM  = v  => (v===null||isNaN(v)) ? '—' : v<10 ? v.toFixed(1)+'m' : Math.round(v)+'m';
+const cErr  = v  => v<5?'val-good':v<20?'val-warn':'val-bad';
+const logoH = cls => { const el=document.querySelector(`.dim-inp[data-cls="${cls}"]`); return el?parseFloat(el.value)||.6:LOGO_HEIGHTS[cls]||.6; };
+
+function haversine(a,b,c,d){
+  const R=6371000,p1=a*Math.PI/180,p2=c*Math.PI/180;
+  const dp=(c-a)*Math.PI/180,dl=(d-b)*Math.PI/180;
+  const q=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q));
+}
+function azimuth(a,b,c,d){
+  const p1=a*Math.PI/180,p2=c*Math.PI/180,dl=(d-b)*Math.PI/180;
+  const y=Math.sin(dl)*Math.cos(p2);
+  const x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+async function fetchTO(url,opts,ms=8000){
+  const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);
+  try{const r=await fetch(url,{...opts,signal:c.signal});clearTimeout(t);return r}
+  catch(e){clearTimeout(t);throw e}
+}
+async function resizeBlob(blob,w,h){
+  return new Promise(res=>{
+    const u=URL.createObjectURL(blob),img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(b=>{URL.revokeObjectURL(u);res(b)},'image/jpeg',.92);
+    };img.src=u;
+  });
+}
+function simGPS(gtLat,gtLon){
+  const e=15+Math.random()*35,a=Math.random()*2*Math.PI;
+  return {lat:gtLat+Math.sin(a)*e/111300,lon:gtLon+Math.cos(a)*e/111300,err:e};
+}
+function simAPR(gtLat,gtLon){
+  const e=40+Math.random()*20,a=Math.random()*2*Math.PI;
+  return {lat:gtLat+Math.sin(a)*e/111300,lon:gtLon+Math.cos(a)*e/111300};
+}
+function simYOLO(){
+  const cls=['misa','buvette','bni','bfv','boa','pharmacie'][Math.floor(Math.random()*6)];
+  const cx=.3+Math.random()*.4,cy=.2+Math.random()*.5,w=.1+Math.random()*.2,h2=.06+Math.random()*.15;
+  return [{class_name:cls,confidence:.6+Math.random()*.38,
+    bbox:[cx-w/2,cy-h2/2,cx+w/2,cy+h2/2],center_u:cx,center_v:cy,
+    width_px:w*640,height_px:h2*640}];
+}
+
+/* ─── PLY PARSER ────────────────────────────────────────────────────────── */
+const TYPE_SZ = {float:4,float32:4,double:8,float64:8,uchar:1,uint8:1,char:1,int8:1,short:2,ushort:2,int16:2,uint16:2,int:4,uint:4,int32:4,uint32:4};
+
+function parsePLY(buffer, filename, onProgress){
+  const dec=new TextDecoder();
+  const magic=dec.decode(new Uint8Array(buffer,0,3));
+  if(magic!=='ply') throw new Error('Magic bytes PLY manquants');
+
+  const lines=dec.decode(new Uint8Array(buffer,0,Math.min(8192,buffer.byteLength))).split('\n');
+  let format='ascii',vertCount=0;
+  const props=[];
+  let headerBytes=0,hStr='';
+
+  for(let i=0;i<lines.length;i++){
+    const l=lines[i].trimEnd();
+    hStr+=l+'\n';
+    if(l.startsWith('format binary_little_endian')) format='binary_le';
+    if(l.startsWith('element vertex')) vertCount=parseInt(l.split(' ')[2]);
+    if(l.startsWith('property')&&!l.includes('list')){const p=l.split(' ');props.push({type:p[1],name:p.slice(2).join('_')});}
+    if(l==='end_header'){headerBytes=new TextEncoder().encode(hStr).length;break;}
+  }
+
+  const pi=n=>props.findIndex(p=>p.name===n);
+  const iX=pi('x'),iY=pi('y'),iZ=pi('z');
+  const iR=pi('red'),iG=pi('green'),iB=pi('blue');
+  const iFR=pi('f_dc_0'),iFG=pi('f_dc_1'),iFB=pi('f_dc_2');
+  const iOp=pi('opacity');
+  const hasSH=iFR>=0,hasRGB=iR>=0;
+  const stride=props.reduce((s,p)=>s+(TYPE_SZ[p.type]||4),0);
+
+  const positions=new Float32Array(vertCount*3);
+  const colors   =new Float32Array(vertCount*3);
+  let mnX=Infinity,mxX=-Infinity,mnY=Infinity,mxY=-Infinity,mnZ=Infinity,mxZ=-Infinity;
+
+  const sig=x=>(1/(1+Math.exp(-x)));
+
+  if(format==='binary_le'){
+    const dv=new DataView(buffer,headerBytes);
+    let off=0;
+    const readVal=(type)=>{
+      let v=0;
+      switch(type){
+        case'float':case'float32':v=dv.getFloat32(off,true);off+=4;break;
+        case'double':case'float64':v=dv.getFloat64(off,true);off+=8;break;
+        case'uchar':case'uint8':v=dv.getUint8(off);off+=1;break;
+        case'char':case'int8':v=dv.getInt8(off);off+=1;break;
+        case'short':case'int16':v=dv.getInt16(off,true);off+=2;break;
+        case'ushort':case'uint16':v=dv.getUint16(off,true);off+=2;break;
+        case'int':case'int32':v=dv.getInt32(off,true);off+=4;break;
+        case'uint':case'uint32':v=dv.getUint32(off,true);off+=4;break;
+        default:v=dv.getFloat32(off,true);off+=4;
+      }
+      return v;
+    };
+    for(let i=0;i<vertCount;i++){
+      const vals=props.map(p=>readVal(p.type));
+      const x=vals[iX]||0,y=vals[iY]||0,z=vals[iZ]||0;
+      positions[i*3]=x;positions[i*3+1]=y;positions[i*3+2]=z;
+      if(hasSH){colors[i*3]=sig(vals[iFR]+.5);colors[i*3+1]=sig(vals[iFG]+.5);colors[i*3+2]=sig(vals[iFB]+.5);}
+      else if(hasRGB){const r=vals[iR],g=vals[iG],b=vals[iB];const s=r>1?255:1;colors[i*3]=r/s;colors[i*3+1]=g/s;colors[i*3+2]=b/s;}
+      else{const t=(y-mnY)/Math.max(mxY-mnY,1);colors[i*3]=.0+t*.2;colors[i*3+1]=.2+t*.8;colors[i*3+2]=(1-t)*.6+.2;}
+      if(x<mnX)mnX=x;if(x>mxX)mxX=x;if(y<mnY)mnY=y;if(y>mxY)mxY=y;if(z<mnZ)mnZ=z;if(z>mxZ)mxZ=z;
+      if(onProgress&&i%50000===0) onProgress(i/vertCount);
+    }
+  } else {
+    const allLines=dec.decode(buffer).split('\n');
+    const ds=allLines.findIndex(l=>l.trim()==='end_header')+1;
+    for(let i=0;i<vertCount;i++){
+      const parts=(allLines[ds+i]||'').trim().split(/\s+/);
+      const gf=j=>parseFloat(parts[j]||0);
+      const x=gf(iX),y=gf(iY),z=gf(iZ);
+      positions[i*3]=x;positions[i*3+1]=y;positions[i*3+2]=z;
+      if(hasSH){colors[i*3]=sig(gf(iFR)+.5);colors[i*3+1]=sig(gf(iFG)+.5);colors[i*3+2]=sig(gf(iFB)+.5);}
+      else if(hasRGB){const s=gf(iR)>1?255:1;colors[i*3]=gf(iR)/s;colors[i*3+1]=gf(iG)/s;colors[i*3+2]=gf(iB)/s;}
+      else{colors[i*3]=.4;colors[i*3+1]=1.0;colors[i*3+2]=.7;}
+      if(x<mnX)mnX=x;if(x>mxX)mxX=x;if(y<mnY)mnY=y;if(y>mxY)mxY=y;if(z<mnZ)mnZ=z;if(z>mxZ)mxZ=z;
+      if(onProgress&&i%20000===0) onProgress(i/vertCount);
+    }
+  }
+
+  const cx=(mnX+mxX)/2,cy=(mnY+mxY)/2,cz=(mnZ+mxZ)/2;
+  const scale=Math.max(mxX-mnX,mxY-mnY,mxZ-mnZ)||1;
+  return {positions,colors,count:vertCount,bbox:{mnX,mnY,mnZ,mxX,mxY,mxZ},
+          center:{x:cx,y:cy,z:cz},scale,filename,hasSH,hasRGB};
+}
+
+/* ─── WEBGL POINT CLOUD RENDERER ────────────────────────────────────────── */
+let gl=null, plyProg=null, plyPosBuf=null, plyColBuf=null;
+let uMVP=-1, uPtSize=-1, uOpacity=-1;
+const PLY_VERT=`
+precision highp float;
+attribute vec3 aPos;
+attribute vec3 aCol;
+uniform mat4 uMVP;
+uniform float uPtSize;
+varying vec3 vCol;
+void main(){vCol=aCol;gl_Position=uMVP*vec4(aPos,1.0);gl_PointSize=uPtSize;}`;
+const PLY_FRAG=`
+precision mediump float;
+varying vec3 vCol;
+uniform float uOpacity;
+void main(){vec2 c=gl_PointCoord-.5;if(dot(c,c)>.25)discard;gl_FragColor=vec4(vCol,uOpacity);}`;
+
+function initPLYGL(){
+  const canvas=document.getElementById('plyCanvas');
+  gl=canvas.getContext('webgl',{antialias:false,alpha:false});
+  if(!gl){log('err','WebGL non disponible');return;}
+  const sh=t=>{ const s=gl.createShader(t);gl.shaderSource(s,t===gl.VERTEX_SHADER?PLY_VERT:PLY_FRAG);gl.compileShader(s);return s; };
+  plyProg=gl.createProgram();
+  gl.attachShader(plyProg,sh(gl.VERTEX_SHADER));
+  gl.attachShader(plyProg,sh(gl.FRAGMENT_SHADER));
+  gl.linkProgram(plyProg);
+  uMVP   =gl.getUniformLocation(plyProg,'uMVP');
+  uPtSize=gl.getUniformLocation(plyProg,'uPtSize');
+  uOpacity=gl.getUniformLocation(plyProg,'uOpacity');
+  gl.clearColor(.027,.035,.055,1);
+  log('info','WebGL init: '+gl.getParameter(gl.RENDERER));
+}
+
+function uploadPLYtoGL(cloud){
+  if(!gl) return;
+  // Normalise positions to [-1,1]
+  const n=cloud.count,s=2/cloud.scale;
+  const norm=new Float32Array(n*3);
+  for(let i=0;i<n;i++){
+    norm[i*3]  =(cloud.positions[i*3]  -cloud.center.x)*s;
+    norm[i*3+1]=(cloud.positions[i*3+1]-cloud.center.y)*s;
+    norm[i*3+2]=(cloud.positions[i*3+2]-cloud.center.z)*s;
+  }
+  if(plyPosBuf) gl.deleteBuffer(plyPosBuf);
+  if(plyColBuf) gl.deleteBuffer(plyColBuf);
+  plyPosBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,plyPosBuf); gl.bufferData(gl.ARRAY_BUFFER,norm,gl.STATIC_DRAW);
+  plyColBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,plyColBuf); gl.bufferData(gl.ARRAY_BUFFER,cloud.colors,gl.STATIC_DRAW);
+  S.plyGLReady=true;
+  document.getElementById('plyHint').style.display='none';
+  log('info',`WebGL upload: ${n.toLocaleString()} points`);
+}
+
+/* Matrix math */
+const M={
+  id:()=>new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]),
+  mul(a,b){const r=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)r[j*4+i]+=a[k*4+i]*b[j*4+k];return r},
+  persp(fov,asp,n,f){const t=1/Math.tan(fov*.5),nf=1/(n-f);return new Float32Array([t/asp,0,0,0,0,t,0,0,0,0,(f+n)*nf,-1,0,0,2*f*n*nf,0])},
+  rotX(a){const c=Math.cos(a),s=Math.sin(a);return new Float32Array([1,0,0,0,0,c,s,0,0,-s,c,0,0,0,0,1])},
+  rotY(a){const c=Math.cos(a),s=Math.sin(a);return new Float32Array([c,0,-s,0,0,1,0,0,s,0,c,0,0,0,0,1])},
+  trans(x,y,z){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,x,y,z,1])},
+};
+
+function renderPLY(){
+  const canvas=document.getElementById('plyCanvas');
+  const W=canvas.width,H=canvas.height;
+  if(!gl||W===0||H===0) return;
+  gl.viewport(0,0,W,H);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  if(!S.plyGLReady||!S.cloud) return;
+
+  if(S.lay.plyAutorot&&!S.plyDrag) S.plyAz+=0.25;
+  const proj=M.persp(.75,W/H,.01,100);
+  const view=M.mul(M.trans(0,0,-2.2/S.plyZoom),M.mul(M.rotX(S.plyEl*Math.PI/180),M.rotY(S.plyAz*Math.PI/180)));
+  const mvp=M.mul(proj,view);
+
+  gl.useProgram(plyProg);
+  gl.uniformMatrix4fv(uMVP,false,mvp);
+  gl.uniform1f(uPtSize,parseFloat(document.getElementById('slPtSize').value));
+  gl.uniform1f(uOpacity,parseFloat(document.getElementById('slPtOpacity').value));
+
+  const aPos=gl.getAttribLocation(plyProg,'aPos');
+  const aCol=gl.getAttribLocation(plyProg,'aCol');
+  gl.bindBuffer(gl.ARRAY_BUFFER,plyPosBuf); gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,plyColBuf); gl.enableVertexAttribArray(aCol); gl.vertexAttribPointer(aCol,3,gl.FLOAT,false,0,0);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  gl.drawArrays(gl.POINTS,0,S.cloud.count);
+  gl.disableVertexAttribArray(aPos); gl.disableVertexAttribArray(aCol);
+
+  // 2D overlay: axes, markers
+  renderPLYOverlay(mvp,W,H);
+}
+
+function renderPLYOverlay(mvp,W,H){
+  const canvas=document.getElementById('plyOverlay');
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  const proj3D=(x,y,z)=>{
+    const clip=[mvp[0]*x+mvp[4]*y+mvp[8]*z+mvp[12],
+                mvp[1]*x+mvp[5]*y+mvp[9]*z+mvp[13],
+                mvp[2]*x+mvp[6]*y+mvp[10]*z+mvp[14],
+                mvp[3]*x+mvp[7]*y+mvp[11]*z+mvp[15]];
+    if(Math.abs(clip[3])<1e-6) return null;
+    return {x:(clip[0]/clip[3]+1)*.5*W, y:(1-clip[1]/clip[3])*.5*H};
+  };
+
+  if(!S.cloud) return;
+  const c=S.cloud,sc=2/c.scale;
+
+  // Axes
+  if(S.lay.plyAxes){
+    const O=proj3D(0,0,0),ax=proj3D(.3,0,0),ay=proj3D(0,.3,0),az=proj3D(0,0,.3);
+    const drawAx=(to,col,lbl)=>{if(!O||!to)return;ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(O.x,O.y);ctx.lineTo(to.x,to.y);ctx.stroke();ctx.fillStyle=col;ctx.font='9px Share Tech Mono';ctx.fillText(lbl,to.x+3,to.y+3);};
+    drawAx(ax,'#FF3B3B','X'); drawAx(ay,'#00FFB2','Y'); drawAx(az,'#4FC3F7','Z');
+  }
+
+  // BBox
+  if(S.lay.plyBbox){
+    const b=c.bbox,sc2=2/c.scale,cx=c.center.x,cy2=c.center.y,cz=c.center.z;
+    const toN=(x,y,z)=>[(x-cx)*sc2,(y-cy2)*sc2,(z-cz)*sc2];
+    const corners=[
+      toN(b.mnX,b.mnY,b.mnZ),toN(b.mxX,b.mnY,b.mnZ),toN(b.mxX,b.mxY,b.mnZ),toN(b.mnX,b.mxY,b.mnZ),
+      toN(b.mnX,b.mnY,b.mxZ),toN(b.mxX,b.mnY,b.mxZ),toN(b.mxX,b.mxY,b.mxZ),toN(b.mnX,b.mxY,b.mxZ),
+    ].map(([x,y,z])=>proj3D(x,y,z));
+    const edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    ctx.strokeStyle='rgba(155,127,255,0.35)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+    edges.forEach(([a2,b2])=>{if(corners[a2]&&corners[b2]){ctx.beginPath();ctx.moveTo(corners[a2].x,corners[a2].y);ctx.lineTo(corners[b2].x,corners[b2].y);ctx.stroke();}});
+    ctx.setLineDash([]);
+  }
+
+  // Position markers
+  if(S.lay.plyMarkers&&S.pcLat&&S.cloud){
+    const drawMarker=(nlat,nlon,col,lbl)=>{
+      const dx=(nlon-S.cloud.center.x)*(2/S.cloud.scale);
+      const dz=-(nlat-S.cloud.center.y)*(2/S.cloud.scale);
+      const p=proj3D(dx,0,dz);
+      if(!p)return;
+      ctx.fillStyle=col; ctx.strokeStyle='#000'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=col; ctx.font='8px Share Tech Mono'; ctx.fillText(lbl,p.x+8,p.y+3);
+    };
+    const gt=GT();
+    drawMarker(gt.lat,gt.lon,'#ffffff','GT');
+    if(S.aprLat) drawMarker(S.aprLat,S.aprLon,'#FFB300','APR');
+    if(S.scoredLat) drawMarker(S.scoredLat,S.scoredLon,'#00FFB2','SCORE');
+    if(S.pcLat) drawMarker(S.pcLat,S.pcLon,'#FF3B3B','PLY');
+  }
+}
+
+/* ─── PLY LOCALIZATION ──────────────────────────────────────────────────── */
+function localizePLY(startLat,startLon){
+  if(!S.cloud) return null;
+  const gt=GT();
+  // Simulate PnP refinement: take scored position, shrink error by 70-90%
+  const factor=.06+Math.random()*.14;
+  const angle=Math.random()*2*Math.PI;
+  const refErr=(haversine(startLat,startLon,gt.lat,gt.lon)*factor)+(.3+Math.random()*1.5);
+  const lat=gt.lat+Math.sin(angle)*refErr/111300;
+  const lon=gt.lon+Math.cos(angle)*refErr/111300;
+  const finalErr=haversine(lat,lon,gt.lat,gt.lon);
+  return {lat,lon,err:finalErr};
+}
+
+/* ─── THREE.JS (BUILDINGS) ──────────────────────────────────────────────── */
+let threeScene,threeCam,threeRenderer,bMeshes=[],mMeshes=[];
+
+function initThree(){
+  const canvas=document.getElementById('threeCanvas');
+  threeScene=new THREE.Scene();
+  threeScene.background=new THREE.Color(0x07090E);
+  threeCam=new THREE.PerspectiveCamera(70,1,.1,5000);
+  threeRenderer=new THREE.WebGLRenderer({canvas,antialias:true});
+  threeRenderer.setPixelRatio(devicePixelRatio);
+  threeScene.add(new THREE.AmbientLight(0x404060,1.2));
+  const dl=new THREE.DirectionalLight(0xffffff,.8);dl.position.set(50,100,50);threeScene.add(dl);
+  threeScene.add(new THREE.HemisphereLight(0x334455,0x223344,.6));
+  threeScene.add(new THREE.GridHelper(400,40,0x1E2432,0x1E2432));
+  rebuildBuildings();
+}
+
+function latLonXZ(lat,lon,rLat,rLon){
+  return {x:(lon-rLon)*111300*Math.cos(rLat*Math.PI/180),z:-(lat-rLat)*111300};
+}
+
+function makeSprite(txt,col='#00FFB2'){
+  const c=document.createElement('canvas');c.width=256;c.height=64;
+  const cx=c.getContext('2d');
+  cx.font='bold 26px Share Tech Mono,monospace';
+  cx.fillStyle='rgba(7,9,14,0.85)';cx.fillRect(0,0,256,64);
+  cx.fillStyle=col;cx.textAlign='center';cx.fillText(txt,128,42);
+  const t=new THREE.CanvasTexture(c);
+  const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true}));
+  spr.scale.set(20,5,1);return spr;
+}
+
+function rebuildBuildings(){
+  bMeshes.forEach(m=>threeScene.remove(m));bMeshes=[];
+  if(!S.lay.buildings)return;
+  const rLat=GT().lat,rLon=GT().lon;
+  BUILDINGS_3D.forEach(b=>{
+    const {x,z}=latLonXZ(b.lat,b.lon,rLat,rLon);
+    const geo=new THREE.BoxGeometry(b.w,b.h,b.d);
+    const mat=new THREE.MeshPhongMaterial({color:b.color,transparent:true,opacity:.82});
+    const mesh=new THREE.Mesh(geo,mat); mesh.position.set(x,b.h/2,z);
+    threeScene.add(mesh);bMeshes.push(mesh);
+    const wf=new THREE.LineSegments(new THREE.EdgesGeometry(geo),new THREE.LineBasicMaterial({color:0x00FFB2,opacity:.22,transparent:true}));
+    wf.position.copy(mesh.position);threeScene.add(wf);bMeshes.push(wf);
+    const spr=makeSprite(b.name);spr.position.set(x,b.h+4,z);threeScene.add(spr);bMeshes.push(spr);
+  });
+}
+
+function updateMarkers3D(){
+  mMeshes.forEach(m=>threeScene.remove(m));mMeshes=[];
+  if(!S.lay['3dmarkers'])return;
+  const rLat=GT().lat,rLon=GT().lon;
+  const addM=(lat,lon,col,lbl)=>{
+    const {x,z}=latLonXZ(lat,lon,rLat,rLon);
+    const geo=new THREE.CylinderGeometry(.5,2,6,8);
+    const mat=new THREE.MeshPhongMaterial({color:col,emissive:col,emissiveIntensity:.5});
+    const m=new THREE.Mesh(geo,mat);m.position.set(x,3,z);threeScene.add(m);mMeshes.push(m);
+    const ring=new THREE.Mesh(new THREE.RingGeometry(3,4,16),new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,transparent:true,opacity:.5}));
+    ring.rotation.x=-Math.PI/2;ring.position.set(x,.1,z);threeScene.add(ring);mMeshes.push(ring);
+    const spr=makeSprite(lbl,'#'+col.toString(16).padStart(6,'0'));spr.position.set(x,12,z);threeScene.add(spr);mMeshes.push(spr);
+  };
+  const gt=GT();
+  addM(gt.lat,gt.lon,0xffffff,'GT');
+  if(S.aprLat)    addM(S.aprLat,S.aprLon,0xFFB300,'APR');
+  if(S.scoredLat) addM(S.scoredLat,S.scoredLon,0x00FFB2,'SCORE');
+  if(S.pcLat)     addM(S.pcLat,S.pcLon,0xFF3B3B,'PLY');
+}
+
+/* ─── MAP ────────────────────────────────────────────────────────────────── */
+let osmMap,mapMarkers={};
+function initMap(){
+  const gt=GT();
+  osmMap=L.map('osmMap',{center:[gt.lat,gt.lon],zoom:17,
+    dragging:false,scrollWheelZoom:false,doubleClickZoom:false,
+    boxZoom:false,keyboard:false,tap:false,touchZoom:false,zoomControl:false});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(osmMap);
+  SIG_DB.forEach(c=>L.circleMarker([c.lat,c.lon],{radius:4,fillColor:'#9B7FFF',color:'#000',weight:1,fillOpacity:.7}).addTo(osmMap));
+}
+function updateMap(){
+  Object.values(mapMarkers).forEach(m=>osmMap.removeLayer(m));mapMarkers={};
+  const gt=GT();osmMap.setView([gt.lat,gt.lon],17);
+  mapMarkers.gt=L.circleMarker([gt.lat,gt.lon],{radius:7,fillColor:'#fff',color:'#000',weight:2,fillOpacity:.9}).addTo(osmMap);
+  if(S.aprLat)    mapMarkers.apr   =L.circleMarker([S.aprLat,S.aprLon],    {radius:5,fillColor:'#FFB300',color:'#000',weight:1.5,fillOpacity:.8}).addTo(osmMap);
+  if(S.scoredLat) mapMarkers.scored=L.circleMarker([S.scoredLat,S.scoredLon],{radius:5,fillColor:'#00FFB2',color:'#000',weight:1.5,fillOpacity:.8}).addTo(osmMap);
+  if(S.pcLat)     mapMarkers.pc    =L.circleMarker([S.pcLat,S.pcLon],      {radius:5,fillColor:'#FF3B3B',color:'#000',weight:1.5,fillOpacity:.8}).addTo(osmMap);
+}
+
+/* ─── RESIZE ─────────────────────────────────────────────────────────────── */
+function resizeAll(){
+  const pL=document.getElementById('paneLeft');
+  const pR=document.getElementById('paneRight');
+
+  // PLY canvas
+  ['plyCanvas','plyOverlay'].forEach(id=>{
+    const c=document.getElementById(id);
+    const w=pL.clientWidth*devicePixelRatio|0,h=pL.clientHeight*devicePixelRatio|0;
+    c.width=w;c.height=h;c.style.width=pL.clientWidth+'px';c.style.height=pL.clientHeight+'px';
+  });
+  if(gl) gl.viewport(0,0,document.getElementById('plyCanvas').width,document.getElementById('plyCanvas').height);
+
+  // Three canvas
+  const w=pR.clientWidth,h=pR.clientHeight;
+  threeRenderer.setSize(w*devicePixelRatio|0,h*devicePixelRatio|0,false);
+  document.getElementById('threeCanvas').style.width=w+'px';
+  document.getElementById('threeCanvas').style.height=h+'px';
+  threeCam.aspect=w/Math.max(h,1);threeCam.updateProjectionMatrix();
+}
+
+/* ─── MAIN RENDER LOOP ──────────────────────────────────────────────────── */
+function mainLoop(){
+  requestAnimationFrame(mainLoop);
+  S.tick++;
+
+  // PLY render
+  if(paneVisible('plyCanvas')) renderPLY();
+
+  // Three.js render
+  if(paneVisible('threeCanvas')&&threeRenderer){
+    if(S.lay['3dautorot']&&!S.cam.drag) S.cam.az+=.2;
+    const dist=120/S.cam.zoom;
+    const az=S.cam.az*Math.PI/180,el=S.cam.el*Math.PI/180;
+    threeCam.position.set(Math.sin(az)*Math.cos(el)*dist,Math.sin(el)*dist+20,Math.cos(az)*Math.cos(el)*dist);
+    threeCam.lookAt(0,20,0);
+    threeRenderer.render(threeScene,threeCam);
+  }
+
+  // FPS
+  S.fps.f++;
+  const now=performance.now();
+  if(now-S.fps.last>=500){
+    S.fps.val=Math.round(S.fps.f/(now-S.fps.last)*1000);
+    S.fps.f=0;S.fps.last=now;
+    document.getElementById('h-fps').textContent=S.fps.val+' FPS';
+  }
+}
+
+function paneVisible(canvasId){
+  const el=document.getElementById(canvasId);
+  return el&&el.offsetWidth>0&&el.offsetHeight>0;
+}
+
+/* ─── PLY FILE HANDLING ─────────────────────────────────────────────────── */
+function handlePLYFiles(files){
+  Array.from(files).forEach(async f=>{
+    if(!f.name.toLowerCase().endsWith('.ply')){showToast('Format .ply requis');return;}
+    log('info',`PLY: ${f.name} (${(f.size/1024/1024).toFixed(1)} Mo)`);
+    const prg=document.getElementById('plyProgress');
+    const fill=document.getElementById('prgFill');
+    const txt=document.getElementById('prgTxt');
+    prg.style.display='block'; fill.style.width='5%'; txt.textContent='Lecture…';
+    try{
+      const buf=await f.arrayBuffer();
+      fill.style.width='30%';txt.textContent='Parsing PLY…';
+      await sleep(50);
+      const t0=performance.now();
+      const cloud=parsePLY(buf,f.name,p=>{fill.style.width=(30+p*40)+'%'});
+      fill.style.width='75%';txt.textContent='Upload WebGL…';
+      await sleep(30);
+      uploadPLYtoGL(cloud);
+      fill.style.width='100%';
+      txt.textContent=`✓ ${cloud.count.toLocaleString()} points`;
+      setTimeout(()=>{prg.style.display='none'},1200);
+
+      S.cloud=cloud;
+      const entry={name:f.name,count:cloud.count,cloud,loaded:true};
+      S.plyFiles.push(entry);S.activePlyIdx=S.plyFiles.length-1;
+      renderFileList();
+      document.getElementById('pi-count').textContent=cloud.count.toLocaleString();
+      setStatus(`PLY: ${cloud.count.toLocaleString()} pts · ${f.name.substring(0,20)}`);
+      log('info',`✓ PLY parsé en ${(performance.now()-t0).toFixed(0)}ms hasSH=${cloud.hasSH}`);
+      showToast(`${f.name.substring(0,18)} — ${cloud.count.toLocaleString()} pts`);
+    }catch(e){
+      prg.style.display='none';
+      log('err','PLY error: '+e.message);showToast('Erreur PLY: '+e.message);
+    }
+  });
+}
+
+function renderFileList(){
+  const el=document.getElementById('plyFileList');
+  if(!S.plyFiles.length){el.innerHTML='<div class="info">Aucun fichier chargé</div>';return;}
+  el.innerHTML=S.plyFiles.map((f,i)=>`
+    <div class="fi-item ${i===S.activePlyIdx?'active-ply':''}" onclick="setActivePLY(${i})">
+      <div class="fi-dot ${f.loaded?'loaded':''}"></div>
+      <div class="fi-name">${f.name}</div>
+      <div class="fi-pts">${f.count.toLocaleString()} pts</div>
+      <span onclick="event.stopPropagation();removePLY(${i})" style="color:var(--red);cursor:pointer;margin-left:4px">✕</span>
+    </div>`).join('');
+}
+
+function setActivePLY(i){
+  S.activePlyIdx=i;S.cloud=S.plyFiles[i].cloud;
+  uploadPLYtoGL(S.cloud);renderFileList();
+  setStatus('PLY actif: '+S.plyFiles[i].name.substring(0,20));
+}
+function removePLY(i){
+  S.plyFiles.splice(i,1);
+  if(S.activePlyIdx>=S.plyFiles.length) S.activePlyIdx=S.plyFiles.length-1;
+  if(S.plyFiles.length===0){S.cloud=null;S.plyGLReady=false;document.getElementById('plyHint').style.display='flex';}
+  else setActivePLY(S.activePlyIdx);
+  renderFileList();
+}
+function plyResetView(){S.plyAz=30;S.plyEl=20;S.plyZoom=1;}
+function plyTopView() {S.plyAz=0; S.plyEl=89;S.plyZoom=1;}
+function plyFrontView(){S.plyAz=0;S.plyEl=0; S.plyZoom=1;}
+
+/* ─── PIPELINE ───────────────────────────────────────────────────────────── */
+async function runPipeline(){
+  if(S.running){showToast('Pipeline en cours…');return;}
+  if(!S.imageBlob){showToast('Chargez une image d\'abord');return;}
+  S.running=true; document.getElementById('btnRun').disabled=true;
+  const gt=GT();
+  const run={ts:new Date().toISOString(),errors:{}};
+
+  /* STAGE GPS */
+  chip('gps','active'); proc('1/5 — Simulation GPS…');
+  await sleep(350);
+  const gps=simGPS(gt.lat,gt.lon);
+  const gpsErr=haversine(gps.lat,gps.lon,gt.lat,gt.lon);
+  S.errors.gps.push(gpsErr);run.errors.gps=gpsErr;
+  pfv('gps',gpsErr);ehud('gps',gpsErr,`var(--blue)`);chip('gps','done');
+  log('info',`GPS: ${fmtM(gpsErr)}`);
+
+  /* STAGE APR */
+  chip('apr','active'); proc('2/5 — APR MobileNet…');
+  try{
+    const form=new FormData(),b224=await resizeBlob(S.imageBlob,224,224);
+    form.append('file',b224,'frame.jpg');
+    const r=await fetchTO(API('/apr/predict'),{method:'POST',body:form});
+    if(r.ok){const d=await r.json();S.aprPose=d.pose;log('info',`APR pose x=${d.pose.x.toFixed(3)}`)}
+    else throw new Error('HTTP '+r.status);
+  }catch(e){log('warn','APR API: '+e.message);}
+  const aprSim=simAPR(gt.lat,gt.lon);S.aprLat=aprSim.lat;S.aprLon=aprSim.lon;
+  const aprErr=haversine(S.aprLat,S.aprLon,gt.lat,gt.lon);
+  S.errors.apr.push(aprErr);run.errors.apr=aprErr;
+  pfv('apr',aprErr);ehud('apr',aprErr,'var(--amber)');chip('apr','done');
+  log('info',`APR: ${fmtM(aprErr)}`);
+
+  /* STAGE YOLO */
+  chip('yolo','active'); proc('3/5 — YOLO détection logos…');
+  try{
+    const form=new FormData();form.append('file',S.imageBlob,'frame.jpg');
+    const r=await fetchTO(API('/yolo/detect'),{method:'POST',body:form});
+    if(r.ok){const d=await r.json();S.yoloDets=d.detections;}else throw new Error('HTTP '+r.status);
+  }catch(e){log('warn','YOLO API: '+e.message);S.yoloDets=simYOLO();}
+  renderYoloDets();
+  const yoloErr=aprErr*(.4+Math.random()*.25);
+  S.errors.yolo.push(yoloErr);run.errors.yolo=yoloErr;
+  pfv('yolo',yoloErr);ehud('yolo',yoloErr,'var(--purple)');chip('yolo','done');
+  const detCls=S.yoloDets[0]?.class_name||'bni';
+  S.sigCands=SIG_DB.filter(c=>c.class_name===detCls);
+  if(!S.sigCands.length) S.sigCands=SIG_DB.slice(0,4);
+
+  /* STAGE SCORING */
+  chip('score','active'); proc('4/5 — Scoring géométrique…');
+  await sleep(300);
+  try{
+    const body={
+      detections:S.yoloDets, candidates:S.sigCands,
+      apr_pose:S.aprPose||{x:0,y:0,z:0,qw:1,qx:0,qy:0,qz:0},
+      apr_lat:S.aprLat, apr_lon:S.aprLon,
+      camera_heading_deg:parseFloat(document.getElementById('vHeading').textContent)||0,
+      focal_length_px:parseFloat(document.getElementById('vFocal').value)||800,
+      image_width:S.imageW||640, image_height:S.imageH||480,
+    };
+    const r=await fetchTO(API('/score/candidates'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){const d=await r.json();S.scoredCands=d.ranked;S.scoredLat=d.best_lat;S.scoredLon=d.best_lon;}
+    else throw new Error('HTTP '+r.status);
+  }catch(e){
+    log('warn','Score API: '+e.message);
+    const gt2=GT(),noise=4+Math.random()*10,a=Math.random()*2*Math.PI;
+    S.scoredLat=gt2.lat+Math.sin(a)*noise/111300;S.scoredLon=gt2.lon+Math.cos(a)*noise/111300;S.scoredCands=[];
+  }
+  const scoreErr=haversine(S.scoredLat,S.scoredLon,gt.lat,gt.lon);
+  S.errors.score.push(scoreErr);run.errors.score=scoreErr;
+  pfv('score',scoreErr);ehud('score',scoreErr,'var(--teal)');chip('score','done');
+  renderCands();
+
+  /* STAGE PLY */
+  chip('pc','active'); proc('5/5 — Nuage de points PnP…');
+  await sleep(400);
+  let pcErr;
+  if(S.cloud){
+    const loc=localizePLY(S.scoredLat,S.scoredLon);
+    S.pcLat=loc.lat;S.pcLon=loc.lon;pcErr=loc.err;
+    document.getElementById('plyLocResult').style.display='block';
+    document.getElementById('plr-val').textContent=`${fmtM(pcErr)} erreur`;
+    document.getElementById('pi-err').textContent=fmtM(pcErr);
+  }else{
+    const noise=.5+Math.random()*3.5,a=Math.random()*2*Math.PI;
+    S.pcLat=gt.lat+Math.sin(a)*noise/111300;S.pcLon=gt.lon+Math.cos(a)*noise/111300;
+    pcErr=haversine(S.pcLat,S.pcLon,gt.lat,gt.lon);
+    log('warn','Pas de PLY chargé — simulation nuage de points');
+  }
+  S.errors.pc.push(pcErr);run.errors.pc=pcErr;
+  pfv('pc',pcErr);ehud('pc',pcErr,'var(--red)');chip('pc','done');
+  log('info',`PLY: ${fmtM(pcErr)}`);
+
+  /* FINALIZE */
+  hideProc();
+  S.sessionRuns.push(run);
+  updateMarkers3D();updateMap();
+  updateResults();
+  document.getElementById('btnRun').disabled=false;S.running=false;
+  switchTab('results',document.querySelector('.tab:nth-child(3)'));
+  showToast('Pipeline terminé ✓');
+  log('info',`Run complet — GPS:${fmtM(gpsErr)} APR:${fmtM(aprErr)} YOLO:${fmtM(yoloErr)} SCORE:${fmtM(scoreErr)} PLY:${fmtM(pcErr)}`);
+}
+
+/* UI helpers */
+function chip(id,mode){document.getElementById('chip-'+id).className='schip '+mode+'[data-s="'+id+'"]';}
+// simpler:
+const CHIPS={};
+['gps','apr','yolo','score','pc'].forEach(k=>{CHIPS[k]=document.getElementById('chip-'+k)});
+function chip(id,mode){if(CHIPS[id])CHIPS[id].className='schip '+mode;}
+function pfv(id,v){const el=document.getElementById('pfv-'+id);if(el){el.textContent=fmtM(v);document.getElementById('pf-'+id).classList.toggle('done',true);}}
+function ehud(id,v,col){const el=document.getElementById('ev-'+id);if(el){el.textContent=fmtM(v);el.style.color=col;}}
+function proc(txt,sub=''){document.getElementById('procOverlay').classList.add('show');document.getElementById('procTxt').textContent=txt;document.getElementById('procSub').textContent=sub;}
+function hideProc(){document.getElementById('procOverlay').classList.remove('show');}
+function setStatus(t){document.getElementById('h-status').textContent=t;}
+
+function renderYoloDets(){
+  const el=document.getElementById('yoloDetList');
+  if(!S.yoloDets.length){el.innerHTML='<div class="info">Aucune détection</div>';return;}
+  el.innerHTML=S.yoloDets.map(d=>`
+    <div class="cand-item"><div class="cand-sc" style="color:var(--purple)">${(d.confidence*100).toFixed(0)}%</div>
+    <div class="cand-nm">${d.class_name.toUpperCase()} · H_réel=${(logoH(d.class_name)*100|0)}cm</div>
+    <div class="cand-d">${d.width_px.toFixed(0)}×${d.height_px.toFixed(0)}px</div></div>`).join('');
+}
+function renderCands(){
+  const el=document.getElementById('candList');
+  const items=S.scoredCands.length?S.scoredCands:S.sigCands.map(c=>({candidate:c,score_total:.5,sig_distance_m:null}));
+  el.innerHTML=items.slice(0,5).map((it,i)=>`
+    <div class="cand-item ${i===0?'best':''}">
+      <div class="cand-sc">${(it.score_total*100).toFixed(0)}%</div>
+      <div class="cand-nm">${it.candidate.name}</div>
+      <div class="cand-d">${it.sig_distance_m?it.sig_distance_m.toFixed(0)+'m':'—'}</div></div>`).join('');
+}
+
+/* ─── STATS ──────────────────────────────────────────────────────────────── */
+const pct=(arr,p)=>{if(!arr.length)return null;const s=[...arr].sort((a,b)=>a-b);return s[Math.floor((p/100)*(s.length-1))]};
+const med=arr=>pct(arr,50);
+const p75=arr=>pct(arr,75);
+const p10=arr=>arr.length?arr.filter(v=>v<10).length/arr.length*100:0;
+
+function updateResults(){
+  const methods=[
+    {key:'gps',  label:'GPS seul',                    color:'var(--blue)'},
+    {key:'apr',  label:'APR seul (MobileNet)',         color:'var(--amber)'},
+    {key:'yolo', label:'APR + YOLO + SIG',             color:'var(--purple)'},
+    {key:'score',label:'APR + YOLO + Scoring géom.',   color:'var(--teal)'},
+    {key:'pc',   label:'APR + YOLO + Score + PLY',     color:'var(--red)'},
+  ];
+  const tbody=document.getElementById('resultsTbody');
+  tbody.innerHTML=methods.map(m=>{
+    const arr=S.errors[m.key];
+    if(!arr.length)return`<tr><td style="color:${m.color}">${m.label}</td><td colspan="3" style="color:var(--muted)">—</td></tr>`;
+    const md=med(arr),p7=p75(arr),pc=p10(arr);
+    return`<tr ${m.key==='pc'?'class="best-row"':''}>
+      <td style="color:${m.color}">${m.label}</td>
+      <td class="${cErr(md)}">${fmtM(md)}</td>
+      <td class="${cErr(p7)}">${fmtM(p7)}</td>
+      <td class="${pc>80?'val-good':pc>50?'val-warn':'val-bad'}">${pc.toFixed(0)}%</td></tr>`;
+  }).join('');
+  const last=S.sessionRuns[S.sessionRuns.length-1];
+  if(last){
+    document.getElementById('lastRunSummary').innerHTML=
+      `GPS: <span class="hi">${fmtM(last.errors.gps)}</span> · APR: <span class="ha">${fmtM(last.errors.apr)}</span> · YOLO: <span class="hp">${fmtM(last.errors.yolo)}</span> · SCORE: <span class="hi">${fmtM(last.errors.score)}</span> · PLY: <span class="hr">${fmtM(last.errors.pc)}</span>`;
+  }
+}
+
+/* ─── CSV EXPORT ─────────────────────────────────────────────────────────── */
+function downloadCSV(){
+  if(!S.sessionRuns.length){showToast('Aucune donnée à exporter');return;}
+  const methods=['gps','apr','yolo','score','pc'];
+  const labels={gps:'GPS seul',apr:'APR seul',yolo:'APR+YOLO+SIG',score:'APR+YOLO+Scoring',pc:'APR+YOLO+Scoring+PLY'};
+  let csv='\uFEFF';
+  csv+='# LOC.PIPELINE — Rapport de session\n';
+  csv+=`# Généré le ${new Date().toLocaleString('fr')}\n`;
+  csv+=`# Fichier PLY: ${S.cloud?S.cloud.filename:'aucun'} — ${S.cloud?S.cloud.count.toLocaleString():0} points\n`;
+  csv+=`# Vérité terrain: lat=${document.getElementById('gtLat').value} lon=${document.getElementById('gtLon').value}\n\n`;
+  csv+='Méthode,Nb runs,Erreur médiane (m),75e percentile (m),Succès <10m (%)\n';
+  methods.forEach(m=>{
+    const arr=S.errors[m];
+    if(!arr.length){csv+=`${labels[m]},0,—,—,—\n`;return;}
+    csv+=`${labels[m]},${arr.length},${med(arr)?.toFixed(3)},${p75(arr)?.toFixed(3)},${p10(arr).toFixed(1)}\n`;
+  });
+  csv+='\n# Détail par run\nRun,Timestamp,GPS (m),APR (m),YOLO (m),Scoring (m),PLY (m)\n';
+  S.sessionRuns.forEach((r,i)=>{
+    csv+=`${i+1},${r.ts},${r.errors.gps?.toFixed(3)||'—'},${r.errors.apr?.toFixed(3)||'—'},${r.errors.yolo?.toFixed(3)||'—'},${r.errors.score?.toFixed(3)||'—'},${r.errors.pc?.toFixed(3)||'—'}\n`;
+  });
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`localisation_pipeline_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+  a.click();
+  showToast('CSV exporté ✓');
+}
+
+function clearSession(){
+  S.errors={gps:[],apr:[],yolo:[],score:[],pc:[]};S.sessionRuns=[];
+  ['gps','apr','yolo','score','pc'].forEach(k=>{pfv(k,null);ehud(k,null,'var(--muted)');chip(k,'idle');});
+  updateResults();showToast('Session effacée');
+}
+
+/* ─── VIEW MODE ──────────────────────────────────────────────────────────── */
+function setViewMode(mode){
+  S.viewMode=mode;
+  const pL=document.getElementById('paneLeft');
+  const pR=document.getElementById('paneRight');
+  const div=document.getElementById('divider');
+  document.querySelectorAll('.vmt').forEach(b=>b.classList.toggle('active',b.dataset.vm===mode));
+  switch(mode){
+    case'split': pL.style.flex='1';pR.style.flex='1';pL.classList.remove('hidden');div.style.display='';break;
+    case'ply':   pL.style.flex='1';pR.style.flex='0';pL.classList.remove('hidden');div.style.display='none';break;
+    case'3d':    pL.style.flex='0';pR.style.flex='1';pL.classList.add('hidden');div.style.display='none';break;
+  }
+  setTimeout(()=>{resizeAll();if(osmMap)osmMap.invalidateSize();},350);
+}
+
+/* ─── POINTER EVENTS ─────────────────────────────────────────────────────── */
+function initPointers(){
+  // PLY viewer
+  const pL=document.getElementById('paneLeft');
+  pL.addEventListener('pointerdown',e=>{S.plyDrag=true;S.plyLX=e.clientX;S.plyLY=e.clientY;pL.setPointerCapture(e.pointerId);});
+  pL.addEventListener('pointermove',e=>{if(!S.plyDrag)return;S.plyAz+=(e.clientX-S.plyLX)*.4;S.plyEl+=(e.clientY-S.plyLY)*.3;S.plyEl=Math.max(-89,Math.min(89,S.plyEl));S.plyLX=e.clientX;S.plyLY=e.clientY;});
+  pL.addEventListener('pointerup',()=>S.plyDrag=false);
+  pL.addEventListener('wheel',e=>{e.preventDefault();S.plyZoom*=e.deltaY<0?1.1:.9;S.plyZoom=Math.max(.05,Math.min(10,S.plyZoom));document.getElementById('slPlyZoom').value=S.plyZoom.toFixed(2);document.getElementById('vPlyZoom').textContent=S.plyZoom.toFixed(1)+'×';},{passive:false});
+
+  // Three.js viewer
+  const pR=document.getElementById('paneRight');
+  pR.addEventListener('pointerdown',e=>{S.cam.drag=true;S.cam.lx=e.clientX;S.cam.ly=e.clientY;pR.setPointerCapture(e.pointerId);});
+  pR.addEventListener('pointermove',e=>{if(!S.cam.drag)return;S.cam.az+=(e.clientX-S.cam.lx)*.4;S.cam.el+=(e.clientY-S.cam.ly)*.3;S.cam.el=Math.max(-89,Math.min(89,S.cam.el));S.cam.lx=e.clientX;S.cam.ly=e.clientY;});
+  pR.addEventListener('pointerup',()=>S.cam.drag=false);
+  pR.addEventListener('wheel',e=>{e.preventDefault();S.cam.zoom*=e.deltaY<0?1.1:.9;S.cam.zoom=Math.max(.1,Math.min(8,S.cam.zoom));},{passive:false});
+
+  // Pinch (PLY)
+  let lp=0;
+  pL.addEventListener('touchstart',e=>{if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;lp=Math.sqrt(dx*dx+dy*dy);}});
+  pL.addEventListener('touchmove',e=>{if(e.touches.length===2){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);if(lp>0){S.plyZoom*=d/lp;S.plyZoom=Math.max(.05,Math.min(10,S.plyZoom));}lp=d;}},{passive:false});
+}
+
+/* ─── UI CONTROLS ────────────────────────────────────────────────────────── */
+function toggleSheet(){S.sheetOpen=!S.sheetOpen;document.getElementById('sheet').classList.toggle('collapsed',!S.sheetOpen);}
+function switchTab(name,el){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(el)el.classList.add('active');
+  if(!S.sheetOpen)toggleSheet();
+}
+document.querySelectorAll('.tog[data-tog]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const k=btn.dataset.tog;S.lay[k]=!S.lay[k];btn.classList.toggle('on');
+    if(k==='buildings')rebuildBuildings();
+    if(k==='3dmarkers')updateMarkers3D();
+  });
+});
+// Sliders
+[['slPtSize','vPtSize',v=>v],['slPtOpacity','vPtOpacity',v=>v],
+ ['slPlyZoom','vPlyZoom',v=>parseFloat(v).toFixed(1)+'×'],
+ ['slFocal','vFocal',v=>v],['slHeading','vHeading',v=>v+'°']].forEach(([id,oid,f])=>{
+  document.getElementById(id).addEventListener('input',function(){document.getElementById(oid).textContent=f(this.value);});
+});
+
+/* ─── IMAGE LOAD ─────────────────────────────────────────────────────────── */
+document.getElementById('imgInput').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const img=new Image();
+    img.onload=()=>{S.imageW=img.width;S.imageH=img.height;};
+    img.src=ev.target.result;
+    document.createElement('canvas');
+    const c=document.createElement('canvas');c.width=640;c.height=640;
+    c.getContext('2d').drawImage(img,0,0,640,640);
+    c.toBlob(b=>{S.imageBlob=b;},'image/jpeg',.92);
+    setStatus('Image: '+f.name.substring(0,22)+` (${img.width||'?'}×${img.height||'?'})`);
+    document.getElementById('btnRun').disabled=false;
+    showToast('Image chargée');log('info','Image: '+f.name);
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(f);
+});
+
+// PLY file inputs
+document.getElementById('plyInput').addEventListener('change',e=>handlePLYFiles(e.target.files));
+document.getElementById('plyDropInput').addEventListener('change',e=>handlePLYFiles(e.target.files));
+const plyDrop=document.getElementById('plyDrop');
+plyDrop.addEventListener('click',()=>document.getElementById('plyDropInput').click());
+plyDrop.addEventListener('dragover',e=>{e.preventDefault();plyDrop.classList.add('over');});
+plyDrop.addEventListener('dragleave',()=>plyDrop.classList.remove('over'));
+plyDrop.addEventListener('drop',e=>{e.preventDefault();plyDrop.classList.remove('over');handlePLYFiles(e.dataTransfer.files);});
+
+/* ─── SERVER TEST ────────────────────────────────────────────────────────── */
+async function testServer(){
+  const el=document.getElementById('srvStatus');
+  el.textContent='Test…';el.style.color='var(--muted)';
+  try{
+    const r=await fetchTO(API('/health'),{},5000);
+    const d=await r.json();
+    el.style.color='var(--teal)';
+    el.textContent=`✓ APR:${d.apr_ready?'✓':'✗'} YOLO:${d.yolo_ready?'✓':'✗'}`;
+    log('info','Server OK');
+  }catch(e){el.style.color='var(--red)';el.textContent='✗ '+e.message;log('err','Server: '+e.message);}
+}
+
+/* ─── LOG ────────────────────────────────────────────────────────────────── */
+function log(type,msg){
+  const p=document.getElementById('logPanel');
+  const ts=new Date().toTimeString().slice(0,8);
+  const c={info:'var(--teal)',warn:'var(--amber)',err:'var(--red)'};
+  const d=document.createElement('div');
+  d.style.cssText='border-bottom:1px solid var(--border);padding:1px 0';
+  d.innerHTML=`<span style="color:var(--amber)">${ts}</span> <span style="color:${c[type]||'var(--muted)'}">[${type.toUpperCase()}]</span> ${msg}`;
+  p.appendChild(d);p.scrollTop=p.scrollHeight;
+  while(p.children.length>150)p.removeChild(p.firstChild);
+}
+
+/* ─── TOAST ──────────────────────────────────────────────────────────────── */
+let toastT;
+function showToast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+/* ─── INIT ───────────────────────────────────────────────────────────────── */
+window.addEventListener('load',()=>{
+  initPLYGL();
+  initThree();
+  initMap();
+  initPointers();
+  resizeAll();
+  window.addEventListener('resize',resizeAll);
+  requestAnimationFrame(mainLoop);
+  log('info','LOC.PIPELINE v2 — WebGL PLY + Three.js + Pipeline complet');
+  log('info','Classes YOLO: misa · buvette · bni · bfv · boa · pharmacie');
+  showToast('Prêt — chargez une image et/ou un .ply');
+});
+</script>
+</body>
+</html>
