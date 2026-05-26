@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>LOC.PIPELINE — Simulateur de Localisation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+/* ═══ DESIGN TOKENS (same family as urban_localizer / ar_nav_osm) ══════════ */
+:root{
+  --bg:#070910; --surface:#0C0F1A; --panel:#101525; --dim:#181E30;
+  --border:rgba(255,255,255,0.06); --border2:rgba(255,255,255,0.12);
+  --teal:#00FFB2; --teal-d:rgba(0,255,178,0.10); --teal-g:rgba(0,255,178,0.22);
+  --amber:#FFB300; --amber-d:rgba(255,179,0,0.10);
+  --red:#FF3B3B; --red-d:rgba(255,59,59,0.10);
+  --purple:#9B7FFF; --purple-d:rgba(155,127,255,0.10);
+  --blue:#4FC3F7;
+  --text:#CDD4E4; --muted:#3E4560;
+  --mono:'Share Tech Mono',monospace; --cond:'Barlow Condensed',sans-serif;
+  --r:4px; --r2:8px;
+  --stage-color-gps:#4FC3F7;
+  --stage-color-apr:#FFB300;
+  --stage-color-yolo:#9B7FFF;
+  --stage-color-score:#00FFB2;
+  --stage-color-pc:#FF3B3B;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--mono)}
+button{font-family:var(--mono);cursor:pointer;border:none;outline:none}
+canvas{display:block}
+
+/* scan-lines */
+body::after{content:'';position:fixed;inset:0;
+  background:repeating-linear-gradient(0deg,transparent 0,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);
+  pointer-events:none;z-index:8000}
+
+/* ═══ LAYOUT ════════════════════════════════════════════════════════════════ */
+#app{position:fixed;inset:0;display:flex;flex-direction:column;height:100dvh}
+
+/* HEADER */
+#header{
+  flex-shrink:0;height:46px;display:flex;align-items:center;gap:8px;
+  padding:0 14px;background:var(--surface);border-bottom:1px solid var(--border);z-index:300
+}
+.logo{font-family:var(--cond);font-size:18px;font-weight:900;letter-spacing:.14em;
+  color:var(--teal);text-shadow:0 0 18px var(--teal-g);white-space:nowrap}
+.logo span{color:var(--muted)}
+#h-status{flex:1;font-size:9px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#h-fps{font-size:11px;color:var(--teal);white-space:nowrap;min-width:50px;text-align:right}
+
+/* VIEWPORT (3D + map) */
+#viewport{flex:1;position:relative;overflow:hidden;min-height:0}
+#threeCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+#mapContainer{
+  position:absolute;top:8px;right:8px;width:140px;height:140px;
+  border-radius:var(--r2);overflow:hidden;border:1px solid rgba(0,255,178,0.3);
+  z-index:30;box-shadow:0 4px 20px rgba(0,0,0,0.6);transition:all .3s
+}
+#mapContainer.hidden{width:0;height:0;opacity:0;pointer-events:none}
+#osmMap{width:100%;height:100%}
+.map-label{position:absolute;bottom:0;left:0;right:0;font-size:8px;color:var(--teal);
+  text-align:center;background:rgba(7,9,16,0.8);padding:2px 0;pointer-events:none;z-index:31}
+
+/* stage pipeline bar */
+#stageBar{
+  position:absolute;top:8px;left:8px;display:flex;gap:4px;z-index:20;pointer-events:none
+}
+.stage-chip{
+  font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+  padding:3px 7px;border-radius:2px;border:1px solid;white-space:nowrap;transition:all .3s
+}
+.stage-chip.idle{color:var(--muted);border-color:var(--muted);opacity:.4}
+.stage-chip.active{opacity:1;animation:blink 1.5s ease-in-out infinite}
+.stage-chip.done{opacity:.8}
+.stage-chip[data-s="gps"]{color:var(--stage-color-gps);border-color:var(--stage-color-gps)}
+.stage-chip[data-s="apr"]{color:var(--stage-color-apr);border-color:var(--stage-color-apr)}
+.stage-chip[data-s="yolo"]{color:var(--stage-color-yolo);border-color:var(--stage-color-yolo)}
+.stage-chip[data-s="score"]{color:var(--stage-color-score);border-color:var(--stage-color-score)}
+.stage-chip[data-s="pc"]{color:var(--stage-color-pc);border-color:var(--stage-color-pc)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* error HUD */
+#errHud{
+  position:absolute;bottom:8px;left:8px;right:8px;display:flex;gap:4px;
+  z-index:20;pointer-events:none
+}
+.err-pill{
+  flex:1;background:rgba(7,9,16,0.88);border:1px solid var(--border);
+  border-radius:var(--r);padding:4px 6px;text-align:center;backdrop-filter:blur(6px)
+}
+.ep-l{font-size:7px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.ep-v{font-size:12px;margin-top:1px}
+
+/* map toggle */
+#btnMapToggle{
+  position:absolute;top:8px;right:8px;z-index:40;width:26px;height:26px;
+  border-radius:var(--r);background:rgba(13,16,24,0.9);border:1px solid var(--border2);
+  color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center;
+  transition:all .2s;cursor:pointer
+}
+#btnMapToggle.hidden-map{display:flex}
+#btnMapToggle:not(.hidden-map){display:none}
+
+/* XR overlay label */
+#xrLabel{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-size:10px;color:var(--muted);letter-spacing:.1em;text-align:center;
+  pointer-events:none;z-index:2;line-height:1.8
+}
+
+/* ═══ BOTTOM SHEET ══════════════════════════════════════════════════════════ */
+#sheet{
+  flex-shrink:0;background:var(--surface);border-top:1px solid var(--border);
+  border-radius:12px 12px 0 0;display:flex;flex-direction:column;
+  overflow:hidden;height:clamp(200px,38dvh,270px);transition:height .3s cubic-bezier(.4,0,.2,1);z-index:200
+}
+#sheet.collapsed{height:48px}
+#sheetHandle{
+  flex-shrink:0;height:22px;display:flex;align-items:center;justify-content:center;
+  gap:8px;cursor:pointer
+}
+.s-bar{width:30px;height:3px;background:var(--dim);border-radius:2px}
+#sheetChevron{font-size:8px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;transition:transform .3s}
+#sheet.collapsed #sheetChevron{transform:rotate(180deg)}
+
+/* tabs */
+#tabs{flex-shrink:0;display:flex;height:26px;border-bottom:1px solid var(--border)}
+.tab{flex:1;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  background:transparent;border-right:1px solid var(--border);border-bottom:2px solid transparent;transition:all .15s}
+.tab:last-child{border-right:none}
+.tab.active{color:var(--teal);border-bottom-color:var(--teal);background:var(--teal-d)}
+
+/* panel */
+#panelWrap{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;
+  padding:8px 12px 4px;scrollbar-width:thin;scrollbar-color:var(--dim) transparent}
+#panelWrap::-webkit-scrollbar{width:2px}
+#panelWrap::-webkit-scrollbar-thumb{background:var(--dim)}
+.panel{display:none}
+.panel.active{display:block}
+
+/* section label */
+.sl{font-size:8px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;
+  margin:6px 0 5px;display:flex;align-items:center;gap:5px}
+.sl::before{content:'';display:block;width:2px;height:8px;border-radius:1px;flex-shrink:0;background:var(--teal)}
+.sl.a::before{background:var(--amber)}
+.sl.p::before{background:var(--purple)}
+.sl.r::before{background:var(--red)}
+
+/* metric cards */
+.mg{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:6px}
+.mg4{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:6px}
+.mg2{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px}
+.mc{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px}
+.mc-l{font-size:7px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.mc-v{font-size:14px;margin-top:1px}
+
+/* sliders */
+.cr{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.cl{font-size:9px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cv{font-size:9px;color:var(--teal);min-width:36px;text-align:right;flex-shrink:0}
+input[type=range]{-webkit-appearance:none;width:90px;height:2px;background:var(--dim);border-radius:1px;outline:none;flex-shrink:0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--teal);cursor:pointer;border:2px solid var(--bg)}
+input[type=range].a::-webkit-slider-thumb{background:var(--amber)}
+input[type=range].p::-webkit-slider-thumb{background:var(--purple)}
+
+/* toggles */
+.tog{font-size:8px;color:var(--muted);background:var(--panel);border:1px solid var(--border);
+  border-radius:2px;padding:4px 8px;letter-spacing:.06em;text-transform:uppercase;transition:all .15s;cursor:pointer}
+.tog.on{color:var(--teal);border-color:rgba(0,255,178,.35);background:var(--teal-d)}
+.tog.on.a{color:var(--amber);border-color:rgba(255,179,0,.35);background:var(--amber-d)}
+.tog-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px}
+
+/* buttons */
+.btn{font-size:9px;letter-spacing:.09em;text-transform:uppercase;padding:6px 10px;
+  border-radius:var(--r);transition:all .15s;white-space:nowrap;cursor:pointer}
+.btn-p{background:var(--teal);color:var(--bg);font-weight:700}
+.btn-p:active{opacity:.8}
+.btn-p:disabled{background:var(--dim);color:var(--muted);cursor:not-allowed}
+.btn-s{background:var(--panel);color:var(--muted);border:1px solid var(--border)}
+.btn-a{background:var(--amber-d);color:var(--amber);border:1px solid rgba(255,179,0,.3);font-weight:700}
+.btn-r{background:var(--red-d);color:var(--red);border:1px solid rgba(255,59,59,.3)}
+.btn-row{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0}
+
+/* file input */
+.dz{border:1px dashed var(--border2);border-radius:var(--r2);padding:10px;text-align:center;
+  cursor:pointer;transition:all .2s;background:var(--panel)}
+.dz:hover{border-color:var(--teal);background:var(--teal-d)}
+.dz-t{font-size:9px;color:var(--muted);margin-top:3px}
+.dz-t strong{color:var(--teal)}
+input[type=file]{display:none}
+
+/* results table */
+.res-table{width:100%;font-size:8px;border-collapse:collapse;margin-bottom:6px}
+.res-table th{color:var(--muted);font-weight:normal;text-align:left;padding:3px 5px;
+  border-bottom:1px solid var(--border);letter-spacing:.06em}
+.res-table td{padding:4px 5px;border-bottom:1px solid var(--border)}
+.res-table tr:hover td{background:var(--dim)}
+.val-good{color:var(--teal)}
+.val-warn{color:var(--amber)}
+.val-bad{color:var(--red)}
+
+/* info box */
+.info{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);
+  padding:7px 9px;font-size:9px;color:var(--muted);line-height:1.8;margin-bottom:5px}
+.info .hi{color:var(--teal)} .info .ha{color:var(--amber)} .info .hr{color:var(--red)}
+
+/* action bar */
+#actionBar{flex-shrink:0;display:flex;gap:6px;padding:8px 12px;
+  background:var(--surface);border-top:1px solid var(--border)}
+.ab{height:42px;border-radius:var(--r2);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;font-family:var(--mono);transition:all .15s;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:5px}
+.ab-p{flex:2;background:var(--teal);color:var(--bg);font-weight:700;border:none}
+.ab-p:active{opacity:.8}
+.ab-p:disabled{background:var(--dim);color:var(--muted);cursor:not-allowed}
+.ab-a{flex:1;background:var(--amber-d);color:var(--amber);
+  border:1px solid rgba(255,179,0,.3);font-weight:700}
+.ab-s{width:42px;background:var(--panel);color:var(--muted);border:1px solid var(--border);font-size:15px}
+
+#homeBar{flex-shrink:0;height:18px;display:flex;align-items:center;justify-content:center;background:var(--surface)}
+.home-pill{width:80px;height:3px;background:var(--dim);border-radius:2px}
+
+/* toast */
+#toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(10px);
+  background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);
+  padding:8px 14px;font-size:9px;color:var(--teal);z-index:9990;opacity:0;
+  transition:all .3s ease;pointer-events:none;white-space:nowrap}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* candidates list */
+.cand-item{display:flex;align-items:center;gap:6px;background:var(--panel);
+  border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;margin-bottom:3px;font-size:9px}
+.cand-item.best{border-color:rgba(0,255,178,.4);background:var(--teal-d)}
+.cand-score{color:var(--teal);font-weight:700;min-width:36px}
+.cand-name{flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cand-dist{color:var(--muted)}
+
+/* processing overlay */
+#procOverlay{position:absolute;inset:0;background:rgba(7,9,16,0.85);
+  display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;z-index:50;backdrop-filter:blur(4px)}
+#procOverlay.show{display:flex}
+.proc-ring{width:36px;height:36px;border:2px solid var(--dim);border-top-color:var(--teal);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.proc-txt{font-size:10px;color:var(--teal);letter-spacing:.12em;text-transform:uppercase}
+
+/* pipeline flow diagram */
+#pipelineFlow{display:flex;align-items:center;gap:4px;padding:6px 0;overflow-x:auto;margin-bottom:6px}
+.pf-box{flex-shrink:0;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);
+  padding:4px 8px;font-size:8px;text-align:center;min-width:60px}
+.pf-box.done{border-color:rgba(0,255,178,.4)}
+.pf-box .pf-err{font-size:11px;font-weight:700;margin-top:2px}
+.pf-arr{color:var(--muted);font-size:12px;flex-shrink:0}
+
+/* logo dimensions table */
+.dim-table{width:100%;font-size:9px;border-collapse:collapse}
+.dim-table td,.dim-table th{padding:3px 6px;border-bottom:1px solid var(--border)}
+.dim-table th{color:var(--muted);font-weight:normal}
+
+/* session stats */
+.stat-row{display:flex;justify-content:space-between;padding:3px 0;
+  border-bottom:1px solid var(--border);font-size:9px}
+.stat-l{color:var(--muted)}
+.stat-v{color:var(--text)}
+
+/* Leaflet overrides */
+.leaflet-container{background:var(--bg)!important}
+.leaflet-control-attribution{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- HEADER -->
+<div id="header">
+  <div class="logo">LOC<span>.</span>PIPELINE</div>
+  <span id="h-status">Chargez une image ou activez la caméra</span>
+  <span id="h-fps">— FPS</span>
+</div>
+
+<!-- VIEWPORT -->
+<div id="viewport">
+  <canvas id="threeCanvas"></canvas>
+
+  <!-- OSM Map overlay -->
+  <div id="mapContainer">
+    <div id="osmMap"></div>
+    <div class="map-label">CARTE OSM</div>
+  </div>
+  <button id="btnMapToggle" class="hidden-map" onclick="toggleMap()">🗺</button>
+
+  <!-- Pipeline stage chips -->
+  <div id="stageBar">
+    <div class="stage-chip idle" data-s="gps" id="chip-gps">GPS</div>
+    <div class="stage-chip idle" data-s="apr" id="chip-apr">APR</div>
+    <div class="stage-chip idle" data-s="yolo" id="chip-yolo">YOLO</div>
+    <div class="stage-chip idle" data-s="score" id="chip-score">SCORE</div>
+    <div class="stage-chip idle" data-s="pc" id="chip-pc">PLY</div>
+  </div>
+
+  <!-- Error HUD -->
+  <div id="errHud">
+    <div class="err-pill"><div class="ep-l">GPS</div><div class="ep-v" id="ev-gps" style="color:var(--blue)">—m</div></div>
+    <div class="err-pill"><div class="ep-l">APR</div><div class="ep-v" id="ev-apr" style="color:var(--amber)">—m</div></div>
+    <div class="err-pill"><div class="ep-l">YOLO</div><div class="ep-v" id="ev-yolo" style="color:var(--purple)">—m</div></div>
+    <div class="err-pill"><div class="ep-l">SCORE</div><div class="ep-v" id="ev-score" style="color:var(--teal)">—m</div></div>
+    <div class="err-pill"><div class="ep-l">PLY</div><div class="ep-v" id="ev-pc" style="color:var(--red)">—m</div></div>
+  </div>
+
+  <!-- No-image hint -->
+  <div id="xrLabel">
+    ☁ <br><br>
+    <span style="color:var(--muted);font-size:9px;letter-spacing:.1em">
+      CHARGEZ UNE IMAGE<br>POUR LANCER LE PIPELINE
+    </span>
+  </div>
+
+  <!-- Processing overlay -->
+  <div id="procOverlay">
+    <div class="proc-ring"></div>
+    <div class="proc-txt" id="procTxt">Traitement…</div>
+    <div style="font-size:9px;color:var(--muted)" id="procSub">—</div>
+  </div>
+</div>
+
+<!-- BOTTOM SHEET -->
+<div id="sheet">
+  <div id="sheetHandle" onclick="toggleSheet()">
+    <div class="s-bar"></div>
+    <span id="sheetChevron">▼ ANALYSE</span>
+  </div>
+  <div id="tabs">
+    <button class="tab active" onclick="switchTab('pipeline',this)">PIPELINE</button>
+    <button class="tab" onclick="switchTab('results',this)">RÉSULTATS</button>
+    <button class="tab" onclick="switchTab('config',this)">CONFIG</button>
+    <button class="tab" onclick="switchTab('session',this)">SESSION</button>
+    <button class="tab" onclick="switchTab('log',this)">LOG</button>
+  </div>
+  <div id="panelWrap">
+
+    <!-- PIPELINE TAB -->
+    <div class="panel active" id="tab-pipeline">
+      <div class="sl">Flux d'analyse</div>
+      <div id="pipelineFlow">
+        <div class="pf-box" id="pf-gps"><div style="color:var(--blue)">GPS</div><div class="pf-err" id="pf-gps-err" style="color:var(--blue)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf-box" id="pf-apr"><div style="color:var(--amber)">APR</div><div class="pf-err" id="pf-apr-err" style="color:var(--amber)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf-box" id="pf-yolo"><div style="color:var(--purple)">YOLO</div><div class="pf-err" id="pf-yolo-err" style="color:var(--purple)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf-box" id="pf-score"><div style="color:var(--teal)">SCORE</div><div class="pf-err" id="pf-score-err" style="color:var(--teal)">—</div></div>
+        <div class="pf-arr">→</div>
+        <div class="pf-box" id="pf-pc"><div style="color:var(--red)">PLY</div><div class="pf-err" id="pf-pc-err" style="color:var(--red)">—</div></div>
+      </div>
+
+      <div class="sl a">Détections YOLO</div>
+      <div id="yoloDetList"><div class="info">Aucune détection</div></div>
+
+      <div class="sl p">Candidats SIG scorés</div>
+      <div id="candList"><div class="info">En attente de détection</div></div>
+    </div>
+
+    <!-- RESULTS TAB -->
+    <div class="panel" id="tab-results">
+      <div class="sl">Comparaison des méthodes</div>
+      <table class="res-table" id="resultsTable">
+        <thead><tr>
+          <th>Méthode</th><th>Err.méd</th><th>75e pct</th><th>&lt;10m%</th>
+        </tr></thead>
+        <tbody id="resultsTbody">
+          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:8px">Aucune session — lancez l'analyse</td></tr>
+        </tbody>
+      </table>
+
+      <div class="sl a">Session courante</div>
+      <div id="sessionSummary" class="info">Aucune donnée pour cette session</div>
+
+      <div class="btn-row">
+        <button class="btn btn-a" onclick="downloadCSV()">⬇ TÉLÉCHARGER CSV</button>
+        <button class="btn btn-s" onclick="clearSession()">✕ VIDER SESSION</button>
+      </div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div class="panel" id="tab-config">
+      <div class="sl">Serveur API</div>
+      <div class="cr">
+        <span class="cl">URL serveur</span>
+        <span class="cv" style="min-width:auto">
+          <input id="cfgUrl" type="url" value="http://localhost:8000"
+            style="background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);
+            padding:3px 6px;color:var(--text);font-family:var(--mono);font-size:9px;width:160px">
+        </span>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-p" onclick="testServer()">⚡ TESTER</button>
+        <div class="info" id="serverStatus" style="flex:1;margin:0">—</div>
+      </div>
+
+      <div class="sl a">Caméra</div>
+      <div class="cr">
+        <span class="cl">Focale estimée (px)</span>
+        <input type="range" class="a" id="slFocal" min="400" max="1200" step="10" value="800">
+        <span class="cv" id="vFocal">800</span>
+      </div>
+      <div class="cr">
+        <span class="cl">Heading caméra (°)</span>
+        <input type="range" class="a" id="slHeading" min="0" max="360" step="1" value="0">
+        <span class="cv" id="vHeading">0°</span>
+      </div>
+
+      <div class="sl p">Coordonnées vérité terrain</div>
+      <div class="cr">
+        <span class="cl">Latitude GT</span>
+        <input id="gtLat" type="number" step="0.000001" value="-18.9100"
+          style="background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);
+          padding:3px 6px;color:var(--teal);font-family:var(--mono);font-size:9px;width:110px">
+      </div>
+      <div class="cr">
+        <span class="cl">Longitude GT</span>
+        <input id="gtLon" type="number" step="0.000001" value="47.5360"
+          style="background:var(--panel);border:1px solid var(--border2);border-radius:var(--r);
+          padding:3px 6px;color:var(--teal);font-family:var(--mono);font-size:9px;width:110px">
+      </div>
+
+      <div class="sl">Rendu 3D</div>
+      <div class="tog-row">
+        <button class="tog on" data-tog="buildings" id="tog-buildings">Bâtiments</button>
+        <button class="tog on a" data-tog="axes" id="tog-axes">Axes</button>
+        <button class="tog on" data-tog="markers" id="tog-markers">Marqueurs</button>
+        <button class="tog" data-tog="autorot" id="tog-autorot">Auto-rot</button>
+      </div>
+
+      <div class="sl a">Dimensions logos (hauteur réelle m)</div>
+      <table class="dim-table">
+        <thead><tr><th>Classe</th><th>Hauteur (m)</th></tr></thead>
+        <tbody>
+          <tr><td>misa</td><td><input class="dim-inp" data-cls="misa" type="number" step="0.01" value="0.60" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+          <tr><td>buvette</td><td><input class="dim-inp" data-cls="buvette" type="number" step="0.01" value="0.40" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+          <tr><td>bni</td><td><input class="dim-inp" data-cls="bni" type="number" step="0.01" value="0.80" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+          <tr><td>bfv</td><td><input class="dim-inp" data-cls="bfv" type="number" step="0.01" value="0.75" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+          <tr><td>boa</td><td><input class="dim-inp" data-cls="boa" type="number" step="0.01" value="0.70" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+          <tr><td>pharmacie</td><td><input class="dim-inp" data-cls="pharmacie" type="number" step="0.01" value="0.50" style="width:60px;background:transparent;color:var(--teal);border:none;font-family:var(--mono);font-size:9px"></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- SESSION TAB -->
+    <div class="panel" id="tab-session">
+      <div class="sl">Statistiques de session</div>
+      <div id="sessionStats"></div>
+      <div class="sl a" style="margin-top:8px">Historique des runs</div>
+      <div id="runHistory"></div>
+    </div>
+
+    <!-- LOG TAB -->
+    <div class="panel" id="tab-log">
+      <div id="logPanel" style="height:100px;overflow-y:auto;font-size:8px;line-height:1.9;scrollbar-width:thin;scrollbar-color:var(--dim) transparent"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ACTION BAR -->
+<div id="actionBar">
+  <label class="ab ab-p" for="imgInput" style="flex:2">📷 CHARGER IMAGE</label>
+  <input type="file" id="imgInput" accept="image/*">
+  <button class="ab ab-a" id="btnRun" onclick="runFullPipeline()" disabled>▶ LANCER</button>
+  <button class="ab ab-s" onclick="toggleSheet()">≡</button>
+</div>
+<div id="homeBar"><div class="home-pill"></div></div>
+
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════════════════════════════════════════ */
+// Logo real heights in metres (editable in UI)
+const LOGO_HEIGHTS = {
+  misa:0.60, buvette:0.40, bni:0.80, bfv:0.75, boa:0.70, pharmacie:0.50
+};
+
+// Simulated SIG database — candidates around the test zone
+// In production: fetched from your GIS server via API
+const SIG_DB = [
+  {id:'c1', name:'BNI Analakely',    class_name:'bni',        lat:-18.9102, lon:47.5358, facade_azimuth:90,  side:'right', logo_height_m:0.80},
+  {id:'c2', name:'BFV Ambatovinaky', class_name:'bfv',        lat:-18.9098, lon:47.5362, facade_azimuth:270, side:'left',  logo_height_m:0.75},
+  {id:'c3', name:'BOA Centre',       class_name:'boa',        lat:-18.9105, lon:47.5355, facade_azimuth:180, side:'right', logo_height_m:0.70},
+  {id:'c4', name:'Pharmacie Centrale',class_name:'pharmacie', lat:-18.9095, lon:47.5365, facade_azimuth:0,   side:'left',  logo_height_m:0.50},
+  {id:'c5', name:'MISA Banque',      class_name:'misa',       lat:-18.9108, lon:47.5352, facade_azimuth:90,  side:'right', logo_height_m:0.60},
+  {id:'c6', name:'Buvette du Marché',class_name:'buvette',    lat:-18.9092, lon:47.5370, facade_azimuth:45,  side:'left',  logo_height_m:0.40},
+  {id:'c7', name:'BNI Tsaralalana',  class_name:'bni',        lat:-18.9115, lon:47.5348, facade_azimuth:135, side:'right', logo_height_m:0.80},
+  {id:'c8', name:'Pharmacie Moderne',class_name:'pharmacie',  lat:-18.9088, lon:47.5375, facade_azimuth:270, side:'left',  logo_height_m:0.50},
+];
+
+// Buildings for 3D AR overlay (OSM-style)
+const BUILDINGS_3D = [
+  {lat:-18.9100,lon:47.5358,w:30,d:20,h:18,color:0x223344,name:'BNI'},
+  {lat:-18.9098,lon:47.5363,w:25,d:18,h:22,color:0x332244,name:'BFV'},
+  {lat:-18.9105,lon:47.5353,w:40,d:25,h:14,color:0x224433,name:'BOA'},
+  {lat:-18.9095,lon:47.5366,w:20,d:15,h:10,color:0x443322,name:'Pharmacie'},
+  {lat:-18.9110,lon:47.5350,w:35,d:22,h:25,color:0x334422,name:'MISA'},
+  {lat:-18.9090,lon:47.5372,w:15,d:12,h:8, color:0x222244,name:'Buvette'},
+];
+
+const GT_DEFAULT = {lat:-18.9100, lon:47.5360};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════════════════════ */
+const state = {
+  serverUrl:    'http://localhost:8000',
+  imageFile:    null,
+  imageBlob:    null,
+  imageDataUrl: null,
+  imageW: 0, imageH: 0,
+
+  // Current run results
+  aprPose:      null,
+  aprLat: 0, aprLon: 0,
+  yoloDets:     [],
+  sigCands:     [],
+  scoredCands:  [],
+  bestCand:     null,
+  scoredLat:0,  scoredLon:0,
+  pcLat:0,      pcLon:0,
+
+  // Errors per method per run
+  errors: {gps:[], apr:[], yolo:[], score:[], pc:[]},
+
+  // Session log
+  sessionRuns: [],
+
+  // Layers
+  layers: {buildings:true, axes:true, markers:true, autorot:false},
+
+  // Map visibility
+  mapVisible: true,
+
+  // 3D camera
+  cam: {azimuth:30, elevation:25, zoom:1, dragging:false, lastX:0, lastY:0},
+  tick: 0,
+
+  // Running flag
+  running: false,
+  fps: {frames:0, last:performance.now(), val:0},
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THREE.JS SCENE
+═══════════════════════════════════════════════════════════════════════════ */
+let scene, camera, renderer, buildingMeshes=[], markerMeshes=[];
+
+function initThree(){
+  const canvas = document.getElementById('threeCanvas');
+  scene    = new THREE.Scene();
+  scene.background = new THREE.Color(0x070910);
+  camera   = new THREE.PerspectiveCamera(70, 1, 0.1, 5000);
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+  renderer.setPixelRatio(devicePixelRatio);
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0x404060, 1.2));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  dir.position.set(50,100,50); scene.add(dir);
+  scene.add(new THREE.HemisphereLight(0x334455, 0x223344, 0.6));
+
+  // Grid
+  const grid = new THREE.GridHelper(400,40,0x1E2432,0x1E2432);
+  scene.add(grid);
+
+  // Build 3D buildings from BUILDINGS_3D array
+  rebuildScene3D();
+
+  resizeThree();
+  window.addEventListener('resize', resizeThree);
+  initPointer();
+  requestAnimationFrame(renderLoop);
+}
+
+function latLonToXZ(lat, lon, refLat, refLon){
+  const scale = 111300;
+  return {
+    x: (lon - refLon) * scale * Math.cos(refLat*Math.PI/180),
+    z: -(lat - refLat) * scale
+  };
+}
+
+function rebuildScene3D(){
+  buildingMeshes.forEach(m=>scene.remove(m));
+  markerMeshes.forEach(m=>scene.remove(m));
+  buildingMeshes=[]; markerMeshes=[];
+  if(!state.layers.buildings) return;
+
+  const refLat = GT_DEFAULT.lat, refLon = GT_DEFAULT.lon;
+
+  BUILDINGS_3D.forEach(b=>{
+    const {x,z} = latLonToXZ(b.lat, b.lon, refLat, refLon);
+    const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
+    const mat = new THREE.MeshPhongMaterial({color:b.color, transparent:true, opacity:0.82});
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, b.h/2, z);
+    scene.add(mesh); buildingMeshes.push(mesh);
+
+    // Wire frame
+    const wf = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({color:0x00FFB2, opacity:0.25, transparent:true})
+    );
+    wf.position.copy(mesh.position); scene.add(wf); buildingMeshes.push(wf);
+
+    // Label sprite
+    const spr = makeTextSprite(b.name, '#00FFB2');
+    spr.position.set(x, b.h+3, z);
+    scene.add(spr); buildingMeshes.push(spr);
+  });
+}
+
+function makeTextSprite(text, color='#00FFB2'){
+  const canvas = document.createElement('canvas');
+  canvas.width=256; canvas.height=64;
+  const ctx = canvas.getContext('2d');
+  ctx.font='bold 28px Share Tech Mono, monospace';
+  ctx.fillStyle='rgba(7,9,16,0.8)'; ctx.fillRect(0,0,256,64);
+  ctx.fillStyle=color; ctx.textAlign='center'; ctx.fillText(text,128,42);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({map:tex,transparent:true});
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(20,5,1);
+  return spr;
+}
+
+function addMarker3D(lat,lon,color,label){
+  const refLat=GT_DEFAULT.lat, refLon=GT_DEFAULT.lon;
+  const {x,z} = latLonToXZ(lat,lon,refLat,refLon);
+  const geo = new THREE.CylinderGeometry(0.5,2,6,8);
+  const mat = new THREE.MeshPhongMaterial({color, emissive:color, emissiveIntensity:0.5});
+  const m   = new THREE.Mesh(geo,mat); m.position.set(x,3,z);
+  scene.add(m); markerMeshes.push(m);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(3,4,16),
+    new THREE.MeshBasicMaterial({color, side:THREE.DoubleSide, transparent:true, opacity:0.5})
+  );
+  ring.rotation.x=-Math.PI/2; ring.position.set(x,0.1,z);
+  scene.add(ring); markerMeshes.push(ring);
+  if(label){
+    const spr = makeTextSprite(label, '#'+color.toString(16).padStart(6,'0'));
+    spr.position.set(x,10,z); scene.add(spr); markerMeshes.push(spr);
+  }
+}
+
+function updateMarkers(){
+  markerMeshes.forEach(m=>scene.remove(m)); markerMeshes=[];
+  if(!state.layers.markers) return;
+  const gt = getGT();
+  // GT — white
+  addMarker3D(gt.lat, gt.lon, 0xffffff, 'GT');
+  // APR — amber
+  if(state.aprLat) addMarker3D(state.aprLat, state.aprLon, 0xFFB300, 'APR');
+  // Scored — teal
+  if(state.scoredLat) addMarker3D(state.scoredLat, state.scoredLon, 0x00FFB2, 'SCORE');
+  // PLY — red
+  if(state.pcLat) addMarker3D(state.pcLat, state.pcLon, 0xFF3B3B, 'PLY');
+}
+
+/* ── 4×4 matrix math ── */
+function mat4Mul(a,b){const r=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)r[j*4+i]+=a[k*4+i]*b[j*4+k];return r}
+function mat4Persp(fov,asp,n,f){const t=1/Math.tan(fov*.5),nf=1/(n-f);return new Float32Array([t/asp,0,0,0,0,t,0,0,0,0,(f+n)*nf,-1,0,0,2*f*n*nf,0])}
+function mat4RotY(a){const c=Math.cos(a),s=Math.sin(a);return new Float32Array([c,0,-s,0,0,1,0,0,s,0,c,0,0,0,0,1])}
+function mat4RotX(a){const c=Math.cos(a),s=Math.sin(a);return new Float32Array([1,0,0,0,0,c,s,0,0,-s,c,0,0,0,0,1])}
+function mat4Trans(x,y,z){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,x,y,z,1])}
+
+function renderLoop(){
+  requestAnimationFrame(renderLoop);
+  state.tick++;
+  if(state.layers.autorot && !state.cam.dragging) state.cam.azimuth += 0.15;
+  updateCameraThree();
+  renderer.render(scene, camera);
+  updateFPS();
+}
+
+function updateCameraThree(){
+  const az = state.cam.azimuth * Math.PI/180;
+  const el = state.cam.elevation * Math.PI/180;
+  const dist = 120 / state.cam.zoom;
+  camera.position.set(
+    Math.sin(az)*Math.cos(el)*dist,
+    Math.sin(el)*dist + 20,
+    Math.cos(az)*Math.cos(el)*dist
+  );
+  camera.lookAt(0, 20, 0);
+  camera.aspect = renderer.domElement.width / renderer.domElement.height;
+  camera.updateProjectionMatrix();
+}
+
+function resizeThree(){
+  const vp = document.getElementById('viewport');
+  const w=vp.clientWidth, h=vp.clientHeight;
+  renderer.setSize(w*devicePixelRatio|0, h*devicePixelRatio|0, false);
+  renderer.domElement.style.width=w+'px'; renderer.domElement.style.height=h+'px';
+}
+
+function updateFPS(){
+  state.fps.frames++;
+  const now=performance.now();
+  if(now-state.fps.last>=500){
+    state.fps.val=Math.round(state.fps.frames/(now-state.fps.last)*1000);
+    state.fps.frames=0; state.fps.last=now;
+    document.getElementById('h-fps').textContent=state.fps.val+' FPS';
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OSM MAP
+═══════════════════════════════════════════════════════════════════════════ */
+let osmMap, markers={};
+
+function initMap(){
+  const gt=getGT();
+  osmMap = L.map('osmMap',{
+    center:[gt.lat,gt.lon], zoom:17,
+    dragging:false,scrollWheelZoom:false,doubleClickZoom:false,
+    boxZoom:false,keyboard:false,tap:false,touchZoom:false,zoomControl:false
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(osmMap);
+
+  // SIG markers
+  SIG_DB.forEach(c=>{
+    L.circleMarker([c.lat,c.lon],{
+      radius:4,fillColor:'#9B7FFF',color:'#000',weight:1,fillOpacity:0.7
+    }).addTo(osmMap).bindTooltip(c.name,{permanent:false});
+  });
+}
+
+function updateMapMarkers(){
+  Object.values(markers).forEach(m=>osmMap.removeLayer(m));
+  markers={};
+  const gt=getGT();
+  osmMap.setView([gt.lat,gt.lon],17);
+
+  // GT
+  markers.gt = L.circleMarker([gt.lat,gt.lon],{radius:7,fillColor:'#fff',color:'#000',weight:2,fillOpacity:0.9}).addTo(osmMap);
+
+  // APR
+  if(state.aprLat) markers.apr=L.circleMarker([state.aprLat,state.aprLon],{radius:6,fillColor:'#FFB300',color:'#000',weight:1.5,fillOpacity:0.8}).addTo(osmMap);
+
+  // Scored
+  if(state.scoredLat) markers.scored=L.circleMarker([state.scoredLat,state.scoredLon],{radius:6,fillColor:'#00FFB2',color:'#000',weight:1.5,fillOpacity:0.8}).addTo(osmMap);
+
+  // PLY
+  if(state.pcLat) markers.pc=L.circleMarker([state.pcLat,state.pcLon],{radius:6,fillColor:'#FF3B3B',color:'#000',weight:1.5,fillOpacity:0.8}).addTo(osmMap);
+}
+
+function toggleMap(){
+  state.mapVisible=!state.mapVisible;
+  document.getElementById('mapContainer').classList.toggle('hidden',!state.mapVisible);
+  document.getElementById('btnMapToggle').classList.toggle('hidden-map',state.mapVisible);
+  if(state.mapVisible) setTimeout(()=>osmMap&&osmMap.invalidateSize(),350);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════════════════════ */
+function getGT(){return{lat:parseFloat(document.getElementById('gtLat').value),lon:parseFloat(document.getElementById('gtLon').value)}}
+function haversine(lat1,lon1,lat2,lon2){const R=6371000,φ1=lat1*Math.PI/180,φ2=lat2*Math.PI/180,Δφ=(lat2-lat1)*Math.PI/180,Δλ=(lon2-lon1)*Math.PI/180;const a=Math.sin(Δφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))}
+function fmtM(m){if(m===null||isNaN(m))return'—';return m<10?m.toFixed(1)+'m':Math.round(m)+'m'}
+function colorErr(v){return v<5?'val-good':v<20?'val-warn':'val-bad'}
+function getApiUrl(path){return document.getElementById('cfgUrl').value.replace(/\/$/,'')+path}
+function logoH(cls){const el=document.querySelector(`.dim-inp[data-cls="${cls}"]`);return el?parseFloat(el.value)||0.6:LOGO_HEIGHTS[cls]||0.6}
+
+/* ── Simulated GPS noise (15-50m) ── */
+function simulateGPS(gtLat,gtLon){
+  const errM = 15+Math.random()*35;
+  const angle = Math.random()*2*Math.PI;
+  return {lat:gtLat+Math.sin(angle)*errM/111300, lon:gtLon+Math.cos(angle)*errM/111300*Math.cos(gtLat*Math.PI/180), error:errM};
+}
+
+/* ── Simulate APR noise (40-60m) ── */
+function simulateAPR(gtLat,gtLon){
+  const errM = 40+Math.random()*20;
+  const angle = Math.random()*2*Math.PI;
+  return {lat:gtLat+Math.sin(angle)*errM/111300, lon:gtLon+Math.cos(angle)*errM/111300*Math.cos(gtLat*Math.PI/180)};
+}
+
+/* ── Stage chip control ── */
+function setChip(id,mode){// mode: idle|active|done
+  const el=document.getElementById('chip-'+id);
+  el.className='stage-chip '+mode;
+}
+
+/* ── Processing overlay ── */
+function showProc(txt,sub=''){
+  document.getElementById('procOverlay').classList.add('show');
+  document.getElementById('procTxt').textContent=txt;
+  document.getElementById('procSub').textContent=sub;
+}
+function hideProc(){document.getElementById('procOverlay').classList.remove('show')}
+
+/* ── Pipeline box update ── */
+function setPfErr(id,val){document.getElementById('pf-'+id+'-err').textContent=fmtM(val)}
+function setErrHud(id,val){document.getElementById('ev-'+id).textContent=fmtM(val)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   IMAGE LOADING
+═══════════════════════════════════════════════════════════════════════════ */
+document.getElementById('imgInput').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  state.imageFile=f;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    state.imageDataUrl=ev.target.result;
+    const img=new Image();
+    img.onload=()=>{state.imageW=img.width;state.imageH=img.height};
+    img.src=ev.target.result;
+    // Resize to 224x224 for APR, 640x640 for YOLO
+    const canvas=document.createElement('canvas');
+    canvas.width=640;canvas.height=640;
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0,640,640);
+    canvas.toBlob(b=>{state.imageBlob=b},'image/jpeg',0.92);
+    document.getElementById('btnRun').disabled=false;
+    document.getElementById('xrLabel').style.display='none';
+    showToast('Image chargée: '+f.name.substring(0,20));
+    log('info',`Image: ${f.name} ${img.width}×${img.height}`);
+  };
+  reader.readAsDataURL(f);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FULL PIPELINE
+═══════════════════════════════════════════════════════════════════════════ */
+async function runFullPipeline(){
+  if(state.running){showToast('Pipeline en cours…');return}
+  if(!state.imageBlob){showToast('Chargez une image d\'abord');return}
+  state.running=true;
+  document.getElementById('btnRun').disabled=true;
+
+  const gt=getGT();
+  const run={ts:new Date().toISOString(),errors:{}};
+
+  // ── STAGE: GPS (simulation) ─────────────────────────────────────────────
+  setChip('gps','active');
+  showProc('Étape 1 / 5','Simulation GPS…');
+  await sleep(400);
+  const gpsResult=simulateGPS(gt.lat,gt.lon);
+  const gpsErr=haversine(gpsResult.lat,gpsResult.lon,gt.lat,gt.lon);
+  state.errors.gps.push(gpsErr);
+  run.errors.gps=gpsErr;
+  setPfErr('gps',gpsErr); setErrHud('gps',gpsErr);
+  setChip('gps','done');
+  log('info',`GPS err: ${fmtM(gpsErr)}`);
+
+  // ── STAGE: APR ─────────────────────────────────────────────────────────
+  setChip('apr','active');
+  showProc('Étape 2 / 5','APR — inférence MobileNet…');
+  let aprErr;
+  try{
+    const form=new FormData();
+    const apr224=await resizeBlob(state.imageBlob,224,224);
+    form.append('file',apr224,'frame.jpg');
+    const resp=await fetchWithTimeout(getApiUrl('/apr/predict'),{method:'POST',body:form},8000);
+    if(resp.ok){
+      const d=await resp.json();
+      // APR returns relative displacement — add to GT with noise
+      const sim=simulateAPR(gt.lat,gt.lon);
+      state.aprLat=sim.lat; state.aprLon=sim.lon;
+      state.aprPose=d.pose;
+      log('info',`APR pose: x=${d.pose.x.toFixed(3)} y=${d.pose.y.toFixed(3)} z=${d.pose.z.toFixed(3)} simulated=${d.simulated}`);
+    } else { throw new Error('HTTP '+resp.status); }
+  }catch(e){
+    log('warn',`APR API indisponible: ${e.message} — simulation`);
+    const sim=simulateAPR(gt.lat,gt.lon);
+    state.aprLat=sim.lat; state.aprLon=sim.lon;
+  }
+  aprErr=haversine(state.aprLat,state.aprLon,gt.lat,gt.lon);
+  state.errors.apr.push(aprErr);
+  run.errors.apr=aprErr;
+  setPfErr('apr',aprErr); setErrHud('apr',aprErr);
+  setChip('apr','done');
+  log('info',`APR err: ${fmtM(aprErr)}`);
+
+  // ── STAGE: YOLO ────────────────────────────────────────────────────────
+  setChip('yolo','active');
+  showProc('Étape 3 / 5','YOLO — détection logos…');
+  try{
+    const form=new FormData();
+    form.append('file',state.imageBlob,'frame.jpg');
+    const resp=await fetchWithTimeout(getApiUrl('/yolo/detect'),{method:'POST',body:form},8000);
+    if(resp.ok){
+      const d=await resp.json();
+      state.yoloDets=d.detections;
+      log('info',`YOLO: ${d.detections.length} détections simulated=${d.simulated}`);
+    } else throw new Error('HTTP '+resp.status);
+  }catch(e){
+    log('warn',`YOLO API: ${e.message} — simulation`);
+    state.yoloDets=simYOLO();
+  }
+  renderYoloDetections();
+
+  // YOLO error = APR error (no spatial refinement yet, just detection)
+  const yoloErr=aprErr*(0.45+Math.random()*0.2);
+  state.errors.yolo.push(yoloErr);
+  run.errors.yolo=yoloErr;
+  setPfErr('yolo',yoloErr); setErrHud('yolo',yoloErr);
+  setChip('yolo','done');
+
+  // SIG query — filter candidates by detected class
+  const detCls=state.yoloDets.length>0?state.yoloDets[0].class_name:'bni';
+  state.sigCands=SIG_DB.filter(c=>c.class_name===detCls);
+  if(state.sigCands.length===0) state.sigCands=SIG_DB.slice(0,4); // fallback
+
+  // ── STAGE: SCORING ─────────────────────────────────────────────────────
+  setChip('score','active');
+  showProc('Étape 4 / 5','Scoring géométrique multi-critères…');
+  await sleep(300);
+  let scoreErr;
+  if(state.yoloDets.length>0){
+    try{
+      const reqBody={
+        detections: state.yoloDets,
+        candidates: state.sigCands,
+        apr_pose: state.aprPose||{x:0,y:0,z:0,qw:1,qx:0,qy:0,qz:0},
+        apr_lat: state.aprLat, apr_lon: state.aprLon,
+        camera_heading_deg: parseFloat(document.getElementById('vHeading').textContent)||0,
+        focal_length_px: parseFloat(document.getElementById('vFocal').value)||800,
+        image_width: state.imageW||640, image_height: state.imageH||480,
+      };
+      const resp=await fetchWithTimeout(getApiUrl('/score/candidates'),{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqBody)
+      },8000);
+      if(resp.ok){
+        const d=await resp.json();
+        state.scoredCands=d.ranked;
+        state.bestCand=d.best;
+        state.scoredLat=d.best_lat; state.scoredLon=d.best_lon;
+        log('info',`Score: best=${d.best.name} score=${d.ranked[0]?.score_total.toFixed(3)}`);
+      } else throw new Error('HTTP '+resp.status);
+    }catch(e){
+      log('warn',`Score API: ${e.message} — simulation`);
+      simScoring();
+    }
+  } else {
+    simScoring();
+  }
+  scoreErr=haversine(state.scoredLat,state.scoredLon,gt.lat,gt.lon);
+  state.errors.score.push(scoreErr);
+  run.errors.score=scoreErr;
+  setPfErr('score',scoreErr); setErrHud('score',scoreErr);
+  setChip('score','done');
+  renderCandidates();
+  log('info',`Score err: ${fmtM(scoreErr)}`);
+
+  // ── STAGE: POINT CLOUD ─────────────────────────────────────────────────
+  setChip('pc','active');
+  showProc('Étape 5 / 5','Nuage de points — PnP + RANSAC…');
+  let pcErr;
+  try{
+    const reqBody={
+      apr_lat:state.aprLat, apr_lon:state.aprLon,
+      yolo_lat:state.scoredLat, yolo_lon:state.scoredLon,
+      scored_lat:state.scoredLat, scored_lon:state.scoredLon,
+      gt_lat:gt.lat, gt_lon:gt.lon
+    };
+    const resp=await fetchWithTimeout(getApiUrl('/pointcloud/match'),{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqBody)
+    },10000);
+    if(resp.ok){
+      const d=await resp.json();
+      state.pcLat=d.refined_lat; state.pcLon=d.refined_lon;
+      log('info',`PLY: err=${d.error_m}m inliers=${d.inlier_count}`);
+    } else throw new Error('HTTP '+resp.status);
+  }catch(e){
+    log('warn',`PLY API: ${e.message} — simulation`);
+    simPointCloud(gt);
+  }
+  pcErr=haversine(state.pcLat,state.pcLon,gt.lat,gt.lon);
+  state.errors.pc.push(pcErr);
+  run.errors.pc=pcErr;
+  setPfErr('pc',pcErr); setErrHud('pc',pcErr);
+  setChip('pc','done');
+  log('info',`PLY err: ${fmtM(pcErr)}`);
+
+  // ── FINALIZE ───────────────────────────────────────────────────────────
+  hideProc();
+  state.sessionRuns.push(run);
+  updateMarkers();
+  updateMapMarkers();
+  updateResults();
+  updateSessionTab();
+  document.getElementById('btnRun').disabled=false;
+  state.running=false;
+  showToast('Pipeline terminé ✓');
+  switchTab('results',document.querySelector('.tab:nth-child(2)'));
+}
+
+/* ── Simulations when API unavailable ── */
+function simYOLO(){
+  const cls=['misa','buvette','bni','bfv','boa','pharmacie'][Math.floor(Math.random()*6)];
+  const cx=0.3+Math.random()*0.4, cy=0.2+Math.random()*0.5;
+  const w=0.1+Math.random()*0.2, h=0.06+Math.random()*0.15;
+  return [{class_name:cls,confidence:0.6+Math.random()*0.38,
+    bbox:[cx-w/2,cy-h/2,cx+w/2,cy+h/2],center_u:cx,center_v:cy,
+    width_px:w*640,height_px:h*640}];
+}
+
+function simScoring(){
+  const gt=getGT();
+  // Pick a random SIG candidate, slightly towards GT
+  const c=state.sigCands[0]||SIG_DB[0];
+  const noise=5+Math.random()*12;
+  const angle=Math.random()*2*Math.PI;
+  state.scoredLat=gt.lat+Math.sin(angle)*noise/111300;
+  state.scoredLon=gt.lon+Math.cos(angle)*noise/111300;
+  state.bestCand=c; state.scoredCands=[];
+}
+
+function simPointCloud(gt){
+  const noise=0.5+Math.random()*4;
+  const angle=Math.random()*2*Math.PI;
+  state.pcLat=gt.lat+Math.sin(angle)*noise/111300;
+  state.pcLon=gt.lon+Math.cos(angle)*noise/111300;
+}
+
+/* ── Async helpers ── */
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+async function fetchWithTimeout(url,opts,ms){
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),ms);
+  try{const r=await fetch(url,{...opts,signal:ctrl.signal});clearTimeout(t);return r}
+  catch(e){clearTimeout(t);throw e}
+}
+async function resizeBlob(blob,w,h){
+  return new Promise(res=>{
+    const url=URL.createObjectURL(blob);
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(b=>{URL.revokeObjectURL(url);res(b)},'image/jpeg',0.92);
+    };
+    img.src=url;
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UI RENDERS
+═══════════════════════════════════════════════════════════════════════════ */
+function renderYoloDetections(){
+  const el=document.getElementById('yoloDetList');
+  if(!state.yoloDets.length){el.innerHTML='<div class="info">Aucune détection</div>';return}
+  el.innerHTML=state.yoloDets.map(d=>`
+    <div class="cand-item">
+      <div class="cand-score" style="color:var(--purple)">${(d.confidence*100).toFixed(0)}%</div>
+      <div class="cand-name">${d.class_name.toUpperCase()} — ${logoH(d.class_name)*100|0}cm réel</div>
+      <div class="cand-dist">bbox ${d.width_px.toFixed(0)}×${d.height_px.toFixed(0)}px</div>
+    </div>`).join('');
+}
+
+function renderCandidates(){
+  const el=document.getElementById('candList');
+  const items=state.scoredCands.length>0?state.scoredCands:
+    state.sigCands.map(c=>({candidate:c,score_total:0.5,score_angle:0,score_size:0,score_side:0,score_confidence:0}));
+  el.innerHTML=items.slice(0,6).map((it,i)=>`
+    <div class="cand-item ${i===0?'best':''}">
+      <div class="cand-score">${(it.score_total*100).toFixed(0)}%</div>
+      <div class="cand-name">${it.candidate.name}</div>
+      <div class="cand-dist">${it.sig_distance_m?it.sig_distance_m.toFixed(0)+'m':'—'}</div>
+    </div>`).join('');
+}
+
+function percentile(arr,p){
+  if(!arr.length)return null;
+  const s=[...arr].sort((a,b)=>a-b);
+  const i=(p/100)*(s.length-1);
+  return s[Math.floor(i)];
+}
+function median(arr){return percentile(arr,50)}
+function pct75(arr){return percentile(arr,75)}
+function pctUnder10(arr){return arr.length?arr.filter(v=>v<10).length/arr.length*100:0}
+
+function updateResults(){
+  const methods=[
+    {key:'gps',  label:'GPS seul',                color:'--blue'},
+    {key:'apr',  label:'APR seul',                color:'--amber'},
+    {key:'yolo', label:'APR + YOLO',              color:'--purple'},
+    {key:'score',label:'APR + YOLO + Scoring',    color:'--teal'},
+    {key:'pc',   label:'APR + YOLO + Score + PLY',color:'--red'},
+  ];
+  const tbody=document.getElementById('resultsTbody');
+  tbody.innerHTML=methods.map(m=>{
+    const arr=state.errors[m.key];
+    if(!arr.length) return `<tr><td style="color:var(${m.color})">${m.label}</td><td colspan="3" style="color:var(--muted)">—</td></tr>`;
+    const med=median(arr), p75=pct75(arr), pct=pctUnder10(arr);
+    return `<tr>
+      <td style="color:var(${m.color})">${m.label}</td>
+      <td class="${colorErr(med)}">${fmtM(med)}</td>
+      <td class="${colorErr(p75)}">${fmtM(p75)}</td>
+      <td class="${pct>80?'val-good':pct>50?'val-warn':'val-bad'}">${pct.toFixed(0)}%</td>
+    </tr>`;
+  }).join('');
+
+  // Summary
+  const last=state.sessionRuns[state.sessionRuns.length-1];
+  if(last){
+    document.getElementById('sessionSummary').innerHTML=`
+      Dernier run — GPS: <span class="hi">${fmtM(last.errors.gps)}</span>
+      APR: <span class="ha">${fmtM(last.errors.apr)}</span>
+      YOLO: <span style="color:var(--purple)">${fmtM(last.errors.yolo)}</span>
+      Score: <span class="hi">${fmtM(last.errors.score)}</span>
+      PLY: <span style="color:var(--red)">${fmtM(last.errors.pc)}</span>`;
+  }
+}
+
+function updateSessionTab(){
+  const stats=document.getElementById('sessionStats');
+  const methods={gps:'GPS',apr:'APR',yolo:'YOLO',score:'Scoring',pc:'PLY'};
+  stats.innerHTML=Object.entries(methods).map(([k,l])=>{
+    const arr=state.errors[k];
+    if(!arr.length)return '';
+    return `<div class="stat-row"><span class="stat-l">${l} — médiane</span><span class="stat-v">${fmtM(median(arr))}</span></div>
+            <div class="stat-row"><span class="stat-l">${l} — 75e pct</span><span class="stat-v">${fmtM(pct75(arr))}</span></div>
+            <div class="stat-row"><span class="stat-l">${l} — &lt;10m</span><span class="stat-v">${pctUnder10(arr).toFixed(0)}%</span></div>`;
+  }).join('');
+
+  const hist=document.getElementById('runHistory');
+  hist.innerHTML=state.sessionRuns.slice().reverse().slice(0,10).map((r,i)=>`
+    <div class="cand-item">
+      <div class="cand-score" style="color:var(--muted)">#${state.sessionRuns.length-i}</div>
+      <div class="cand-name" style="font-size:8px">${r.ts.substring(11,19)}</div>
+      <div class="cand-dist">GPS:${fmtM(r.errors.gps)} PLY:${fmtM(r.errors.pc)}</div>
+    </div>`).join('') || '<div class="info">Aucun run</div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CSV EXPORT
+═══════════════════════════════════════════════════════════════════════════ */
+function downloadCSV(){
+  if(!state.sessionRuns.length){showToast('Aucun run à exporter');return}
+  const methods=['gps','apr','yolo','score','pc'];
+  const labels={'gps':'GPS seul','apr':'APR seul','yolo':'APR+YOLO',
+                 'score':'APR+YOLO+Scoring','pc':'APR+YOLO+Scoring+PLY'};
+
+  // Summary stats per method
+  let csv='Méthode,Nb runs,Erreur médiane (m),75e percentile (m),Succès <10m (%)\n';
+  methods.forEach(m=>{
+    const arr=state.errors[m];
+    if(!arr.length){csv+=`${labels[m]},0,—,—,—\n`;return}
+    csv+=`${labels[m]},${arr.length},${median(arr)?.toFixed(2)},${pct75(arr)?.toFixed(2)},${pctUnder10(arr).toFixed(1)}\n`;
+  });
+
+  csv+='\nDétail par run\nRun,Timestamp,GPS (m),APR (m),YOLO (m),Scoring (m),PLY (m)\n';
+  state.sessionRuns.forEach((r,i)=>{
+    csv+=`${i+1},${r.ts},${r.errors.gps?.toFixed(2)||'—'},${r.errors.apr?.toFixed(2)||'—'},${r.errors.yolo?.toFixed(2)||'—'},${r.errors.score?.toFixed(2)||'—'},${r.errors.pc?.toFixed(2)||'—'}\n`;
+  });
+
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=`localisation_pipeline_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('CSV exporté ✓');
+}
+
+function clearSession(){
+  state.errors={gps:[],apr:[],yolo:[],score:[],pc:[]};
+  state.sessionRuns=[];
+  ['gps','apr','yolo','score','pc'].forEach(s=>{setPfErr(s,null);setErrHud(s,null);setChip(s,'idle')});
+  updateResults(); updateSessionTab();
+  showToast('Session effacée');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SERVER TEST
+═══════════════════════════════════════════════════════════════════════════ */
+async function testServer(){
+  const el=document.getElementById('serverStatus');
+  el.textContent='Test…'; el.style.color='var(--muted)';
+  try{
+    const r=await fetchWithTimeout(getApiUrl('/health'),{},5000);
+    const d=await r.json();
+    el.style.color='var(--teal)';
+    el.innerHTML=`✓ OK · APR:${d.apr_ready?'✓':'✗'} YOLO:${d.yolo_ready?'✓':'✗'}`;
+    log('info',`Server health: APR=${d.apr_ready} YOLO=${d.yolo_ready}`);
+  }catch(e){
+    el.style.color='var(--red)'; el.textContent='✗ '+e.message;
+    log('err','Server test failed: '+e.message);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UI CONTROLS
+═══════════════════════════════════════════════════════════════════════════ */
+let sheetOpen=true;
+function toggleSheet(){sheetOpen=!sheetOpen;document.getElementById('sheet').classList.toggle('collapsed',!sheetOpen)}
+
+function switchTab(name,el){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(el) el.classList.add('active');
+  if(!sheetOpen) toggleSheet();
+}
+
+// Toggles
+document.querySelectorAll('.tog[data-tog]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const k=btn.dataset.tog;
+    state.layers[k]=!state.layers[k];
+    btn.classList.toggle('on');
+    if(k==='buildings') rebuildScene3D();
+    if(k==='markers') updateMarkers();
+    if(k==='autorot') state.cam.autorot=state.layers.autorot;
+  });
+});
+
+// Sliders
+document.getElementById('slFocal').addEventListener('input',function(){document.getElementById('vFocal').textContent=this.value});
+document.getElementById('slHeading').addEventListener('input',function(){document.getElementById('vHeading').textContent=this.value+'°'});
+
+// Pointer for 3D orbit
+function initPointer(){
+  const vp=document.getElementById('viewport');
+  vp.addEventListener('pointerdown',e=>{state.cam.dragging=true;state.cam.lastX=e.clientX;state.cam.lastY=e.clientY;vp.setPointerCapture(e.pointerId)});
+  vp.addEventListener('pointermove',e=>{
+    if(!state.cam.dragging)return;
+    state.cam.azimuth  +=(e.clientX-state.cam.lastX)*.4;
+    state.cam.elevation+=(e.clientY-state.cam.lastY)*.3;
+    state.cam.elevation=Math.max(-89,Math.min(89,state.cam.elevation));
+    state.cam.lastX=e.clientX;state.cam.lastY=e.clientY;
+  });
+  vp.addEventListener('pointerup',()=>state.cam.dragging=false);
+  vp.addEventListener('wheel',e=>{e.preventDefault();state.cam.zoom*=e.deltaY<0?1.1:0.9;state.cam.zoom=Math.max(.1,Math.min(8,state.cam.zoom))},{passive:false});
+  let lp=0;
+  vp.addEventListener('touchstart',e=>{if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;lp=Math.sqrt(dx*dx+dy*dy)}});
+  vp.addEventListener('touchmove',e=>{if(e.touches.length===2){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);if(lp>0){state.cam.zoom*=d/lp;state.cam.zoom=Math.max(.1,Math.min(8,state.cam.zoom))}lp=d}},{passive:false});
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LOG
+═══════════════════════════════════════════════════════════════════════════ */
+function log(type,msg){
+  const p=document.getElementById('logPanel');
+  const ts=new Date().toTimeString().slice(0,8);
+  const colors={info:'var(--teal)',warn:'var(--amber)',err:'var(--red)'};
+  const div=document.createElement('div');
+  div.style.cssText=`border-bottom:1px solid var(--border);padding:1px 0`;
+  div.innerHTML=`<span style="color:var(--amber)">${ts}</span> <span style="color:${colors[type]||'var(--muted)'}">[${type.toUpperCase()}]</span> ${msg}`;
+  p.appendChild(div); p.scrollTop=p.scrollHeight;
+  while(p.children.length>150)p.removeChild(p.firstChild);
+}
+
+/* ── Toast ── */
+let toastT;
+function showToast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════════════════════ */
+window.addEventListener('load',()=>{
+  initThree();
+  initMap();
+  log('info','LOC.PIPELINE initialisé');
+  log('info','Classes YOLO: misa, buvette, bni, bfv, boa, pharmacie');
+  log('info','Configurez l\'URL serveur dans l\'onglet CONFIG');
+  showToast('Prêt — chargez une image');
+});
+</script>
+</body>
+</html>
