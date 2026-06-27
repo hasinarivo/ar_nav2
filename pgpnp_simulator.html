@@ -1,0 +1,1700 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>PG-PnP Simulator — Affinement de pose AR</title>
+<style>
+:root{
+  --bg:#0b0f14;
+  --panel:#121821;
+  --panel2:#0e141c;
+  --border:#1f2a37;
+  --text:#e6edf3;
+  --muted:#8b9bab;
+  --accent:#3ea6ff;
+  --accent2:#22c55e;
+  --warn:#f59e0b;
+  --bad:#ef4444;
+  --good:#22c55e;
+}
+*{box-sizing:border-box;}
+html,body{
+  margin:0;padding:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-tap-highlight-color:transparent;
+  overscroll-behavior-y:none;
+}
+#app{
+  max-width:560px;
+  margin:0 auto;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+header{
+  padding:14px 16px 10px;
+  border-bottom:1px solid var(--border);
+  position:sticky;top:0;background:rgba(11,15,20,0.95);backdrop-filter:blur(6px);
+  z-index:20;
+}
+header h1{
+  font-size:15px;margin:0 0 2px;font-weight:600;letter-spacing:0.2px;
+}
+header p{margin:0;font-size:11.5px;color:var(--muted);}
+nav.tabs{
+  display:flex;gap:4px;padding:8px 12px 0;
+  border-bottom:1px solid var(--border);
+  position:sticky;top:54px;background:rgba(11,15,20,0.97);z-index:19;
+  overflow-x:auto;
+}
+nav.tabs button{
+  flex:1;min-width:64px;
+  background:none;border:none;color:var(--muted);
+  font-size:11px;padding:9px 4px 10px;
+  border-bottom:2px solid transparent;
+  font-weight:600;
+}
+nav.tabs button.active{color:var(--accent);border-bottom-color:var(--accent);}
+main{flex:1;padding:14px 14px 90px;}
+section.view{display:none;}
+section.view.active{display:block;}
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:14px;
+  margin-bottom:12px;
+}
+.card h2{
+  font-size:13px;margin:0 0 10px;color:var(--text);
+  display:flex;align-items:center;gap:6px;font-weight:600;
+}
+.card h2 .step-badge{
+  background:var(--accent);color:#04111d;font-size:10px;font-weight:700;
+  padding:2px 7px;border-radius:20px;
+}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+.row label{font-size:12px;color:var(--muted);min-width:120px;}
+.row input[type=number], .row input[type=text]{
+  flex:1;background:var(--panel2);border:1px solid var(--border);
+  color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;min-width:80px;
+}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--accent);color:#04111d;border:none;
+  padding:11px 14px;border-radius:10px;font-size:13px;font-weight:700;
+  width:100%;cursor:pointer;
+}
+.btn.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border);}
+.btn.warn{background:var(--warn);color:#1a1100;}
+.btn.bad{background:var(--bad);color:#fff;}
+.btn:disabled{opacity:0.4;}
+.btn-row{display:flex;gap:8px;}
+.btn-row .btn{width:auto;flex:1;}
+.pill{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;padding:4px 9px;border-radius:20px;
+  background:var(--panel2);border:1px solid var(--border);color:var(--muted);
+}
+.pill.ok{color:var(--good);border-color:rgba(34,197,94,0.4);}
+.pill.bad{color:var(--bad);border-color:rgba(239,68,68,0.4);}
+.pill.warn{color:var(--warn);border-color:rgba(245,158,11,0.4);}
+.muted{color:var(--muted);font-size:11.5px;line-height:1.5;}
+.statgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+.stat{
+  background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+  padding:10px;text-align:center;
+}
+.stat .v{font-size:18px;font-weight:700;}
+.stat .l{font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:0.4px;}
+video, canvas{width:100%;border-radius:10px;background:#000;display:block;}
+.cam-wrap{position:relative;}
+.cam-overlay{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+}
+.cam-overlay svg{width:60%;opacity:0.5;}
+table{width:100%;border-collapse:collapse;font-size:11px;}
+table th, table td{
+  border-bottom:1px solid var(--border);padding:6px 4px;text-align:left;color:var(--text);
+}
+table th{color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;}
+.scroll-x{overflow-x:auto;}
+.progress-bar{height:6px;background:var(--panel2);border-radius:6px;overflow:hidden;margin:8px 0;}
+.progress-bar > div{height:100%;background:var(--accent);width:0%;transition:width 0.2s;}
+.log{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:10.5px;color:var(--muted);background:var(--panel2);
+  border:1px solid var(--border);border-radius:8px;padding:8px;
+  max-height:160px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;
+}
+.toast{
+  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  background:#1a2230;border:1px solid var(--border);color:var(--text);
+  padding:10px 16px;border-radius:10px;font-size:12.5px;z-index:100;
+  box-shadow:0 6px 24px rgba(0,0,0,0.5);
+  opacity:0;transition:opacity 0.25s,transform 0.25s;
+  pointer-events:none;max-width:88%;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-4px);}
+.badge-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}
+.divider{height:1px;background:var(--border);margin:12px 0;}
+.flex-between{display:flex;justify-content:space-between;align-items:center;}
+.small-link{color:var(--accent);font-size:11.5px;text-decoration:underline;background:none;border:none;padding:0;}
+canvas#mapCanvas{touch-action:none;}
+.point-marker{position:absolute;width:10px;height:10px;border-radius:50%;transform:translate(-50%,-50%);}
+.compare-bars{display:flex;align-items:flex-end;gap:18px;height:120px;padding:0 10px;}
+.compare-bars .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;}
+.compare-bars .bar{width:100%;border-radius:6px 6px 0 0;}
+.compare-bars .bar.classic{background:var(--bad);}
+.compare-bars .bar.pgpnp{background:var(--good);}
+.compare-bars .bar-label{font-size:10px;color:var(--muted);margin-top:6px;text-align:center;}
+.compare-bars .bar-val{font-size:11px;font-weight:700;margin-bottom:4px;}
+footer.tabbar{
+  position:fixed;bottom:0;left:0;right:0;
+  max-width:560px;margin:0 auto;
+  background:rgba(14,20,28,0.96);backdrop-filter:blur(8px);
+  border-top:1px solid var(--border);
+  display:flex;z-index:20;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+footer.tabbar button{
+  flex:1;background:none;border:none;color:var(--muted);
+  padding:10px 2px 8px;font-size:10px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:3px;
+}
+footer.tabbar button.active{color:var(--accent);}
+footer.tabbar svg{width:20px;height:20px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>PG-PnP Simulator</h1>
+    <p>Affinement de pose par nuage COLMAP — Niveau 3 de la cascade de localisation</p>
+  </header>
+
+  <main id="main"></main>
+
+  <footer class="tabbar" id="tabbar"></footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+window.STATE = {
+  view: 'setup',
+  ply: null,        // {points:[{x,y,z,r,g,b}], bounds:{...}, raw info}
+  gps: null,         // {lat, lon, acc}
+  truePose: null,    // {x,y,z (local meters), yaw,pitch,roll} hidden ground truth
+  aprPose: null,     // simulated APR pose with noise
+  camera: null,      // {stream, video}
+  lastCapture: null, // {correspondences, K, ...}
+  lastResult: null,  // result of last localization run
+  history: [],        // array of run records for CSV
+  runCounter: 0
+};
+
+/* ============================================================
+   UTILITAIRES GÉNÉRAUX
+   ============================================================ */
+function toast(msg, ms){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(()=>t.classList.remove('show'), ms||2200);
+}
+function fmt(n, d){ if(n===null||n===undefined||isNaN(n)) return '—'; return Number(n).toFixed(d===undefined?2:d); }
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function randn(){ // gaussienne standard (Box-Muller)
+  let u=0,v=0;
+  while(u===0) u=Math.random();
+  while(v===0) v=Math.random();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+}
+function randRange(a,b){return a+Math.random()*(b-a);}
+function nowMs(){ return performance.now(); }
+
+/* Conversion GPS -> plan local tangent (mètres), origine = premier point GPS reçu */
+const EARTH_R = 6378137;
+function gpsToLocal(lat, lon, originLat, originLon){
+  const dLat = (lat - originLat) * Math.PI/180;
+  const dLon = (lon - originLon) * Math.PI/180;
+  const x = dLon * EARTH_R * Math.cos(originLat*Math.PI/180); // Est
+  const y = dLat * EARTH_R; // Nord
+  return {x, y};
+}
+
+/* ============================================================
+   PARSING DU FICHIER .PLY (ASCII + binaire little-endian)
+   Supporte les exports COLMAP standard : x y z [nx ny nz] [red green blue]
+   ============================================================ */
+async function parsePLY(arrayBuffer){
+  const bytes = new Uint8Array(arrayBuffer);
+  const headerText = (() => {
+    let str = '';
+    const maxHeaderBytes = Math.min(bytes.length, 20000);
+    for(let i=0;i<maxHeaderBytes;i++) str += String.fromCharCode(bytes[i]);
+    return str;
+  })();
+  const endIdx = headerText.indexOf('end_header');
+  if(endIdx === -1) throw new Error('Fichier PLY invalide : en-tête introuvable');
+  let headerStr = headerText.substring(0, endIdx);
+  let bodyStart = endIdx + 'end_header'.length;
+  while(bytes[bodyStart] === 10 || bytes[bodyStart] === 13) bodyStart++;
+
+  const lines = headerStr.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  let format = 'ascii';
+  let vertexCount = 0;
+  let properties = [];
+  let inVertexElement = false;
+  let currentElement = null;
+
+  for(const line of lines){
+    const parts = line.split(/\s+/);
+    if(parts[0] === 'format'){
+      format = parts[1];
+    } else if(parts[0] === 'element'){
+      currentElement = parts[1];
+      if(currentElement === 'vertex'){
+        vertexCount = parseInt(parts[2], 10);
+        inVertexElement = true;
+      } else {
+        inVertexElement = false;
+      }
+    } else if(parts[0] === 'property' && inVertexElement){
+      const type = parts[1];
+      const name = parts[parts.length-1];
+      properties.push({name, type});
+    }
+  }
+
+  if(vertexCount === 0) throw new Error('Aucun sommet trouvé dans le fichier PLY');
+
+  const typeSizes = {
+    'char':1,'uchar':1,'int8':1,'uint8':1,
+    'short':2,'ushort':2,'int16':2,'uint16':2,
+    'int':4,'uint':4,'int32':4,'uint32':4,
+    'float':4,'float32':4,
+    'double':8,'float64':8
+  };
+
+  const points = [];
+  const idx = {};
+  properties.forEach((p,i)=>{ idx[p.name] = i; });
+  const hasColor = ('red' in idx) && ('green' in idx) && ('blue' in idx);
+
+  if(format === 'ascii'){
+    const bodyText = new TextDecoder('utf-8').decode(bytes.subarray(bodyStart));
+    const bodyLines = bodyText.split(/\r?\n/);
+    let li = 0;
+    for(let v=0; v<vertexCount && li<bodyLines.length; li++){
+      const l = bodyLines[li].trim();
+      if(!l) continue;
+      const vals = l.split(/\s+/).map(Number);
+      const pt = {
+        x: vals[idx['x']], y: vals[idx['y']], z: vals[idx['z']],
+        r: hasColor ? vals[idx['red']] : 160,
+        g: hasColor ? vals[idx['green']] : 160,
+        b: hasColor ? vals[idx['blue']] : 160
+      };
+      points.push(pt);
+      v++;
+    }
+  } else {
+    const little = format === 'binary_little_endian';
+    const dv = new DataView(arrayBuffer);
+    let offset = bodyStart;
+    let stride = 0;
+    const offsets = [];
+    for(const p of properties){
+      offsets.push({name:p.name, type:p.type, off:stride});
+      stride += typeSizes[p.type] || 4;
+    }
+    function readVal(type, off){
+      switch(type){
+        case 'float': case 'float32': return dv.getFloat32(off, little);
+        case 'double': case 'float64': return dv.getFloat64(off, little);
+        case 'uchar': case 'uint8': return dv.getUint8(off);
+        case 'char': case 'int8': return dv.getInt8(off);
+        case 'ushort': case 'uint16': return dv.getUint16(off, little);
+        case 'short': case 'int16': return dv.getInt16(off, little);
+        case 'uint': case 'uint32': return dv.getUint32(off, little);
+        case 'int': case 'int32': return dv.getInt32(off, little);
+        default: return dv.getFloat32(off, little);
+      }
+    }
+    const xOff = offsets.find(o=>o.name==='x');
+    const yOff = offsets.find(o=>o.name==='y');
+    const zOff = offsets.find(o=>o.name==='z');
+    const rOff = offsets.find(o=>o.name==='red');
+    const gOff = offsets.find(o=>o.name==='green');
+    const bOff = offsets.find(o=>o.name==='blue');
+
+    for(let v=0; v<vertexCount; v++){
+      const base = offset + v*stride;
+      if(base + stride > bytes.length) break;
+      const pt = {
+        x: readVal(xOff.type, base+xOff.off),
+        y: readVal(yOff.type, base+yOff.off),
+        z: readVal(zOff.type, base+zOff.off),
+        r: rOff ? readVal(rOff.type, base+rOff.off) : 160,
+        g: gOff ? readVal(gOff.type, base+gOff.off) : 160,
+        b: bOff ? readVal(bOff.type, base+bOff.off) : 160
+      };
+      points.push(pt);
+    }
+  }
+
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  for(const p of points){
+    if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+    if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+    if(p.z<minZ)minZ=p.z; if(p.z>maxZ)maxZ=p.z;
+  }
+  return {
+    points,
+    count: points.length,
+    format,
+    bounds:{minX,maxX,minY,maxY,minZ,maxZ},
+    center:{x:(minX+maxX)/2, y:(minY+maxY)/2, z:(minZ+maxZ)/2}
+  };
+}
+
+/* ============================================================
+   GÉOMÉTRIE CAMÉRA & ALGÈBRE LINÉAIRE MINIMALE
+   ============================================================ */
+
+// Matrice intrinsèque K simulée pour un smartphone (FOV ~65°, résolution 1280x720)
+function buildK(width, height){
+  const fovDeg = 65;
+  const f = (width/2) / Math.tan((fovDeg*Math.PI/180)/2);
+  return {
+    fx:f, fy:f, cx:width/2, cy:height/2, w:width, h:height
+  };
+}
+
+// Rotation monde->caméra à partir de (yaw, pitch, roll).
+// Convention : monde X=Est, Y=Nord, Z=Haut. yaw=0 -> la caméra regarde vers le Nord (+Y),
+// yaw augmente en pivotant vers l'Est (+X). pitch incline le regard vers le haut/bas. roll incline l'horizon.
+// Repère caméra (lignes de R) : ligne0=droite image (x_cam), ligne1=bas image (y_cam), ligne2=visée/profondeur (z_cam).
+function eulerToR(yaw, pitch, roll){
+  const cy=Math.cos(yaw), sy=Math.sin(yaw);
+  const cp=Math.cos(pitch), sp=Math.sin(pitch);
+  const fwd = [sy*cp, cy*cp, sp];      // direction de visée dans le monde
+  const right = [cy, -sy, 0];          // droite caméra dans le plan horizontal du monde
+  let up = [
+    right[1]*fwd[2]-right[2]*fwd[1],
+    right[2]*fwd[0]-right[0]*fwd[2],
+    right[0]*fwd[1]-right[1]*fwd[0]
+  ];
+  const f = normalize3(fwd), r = normalize3(right), u = normalize3(up);
+  const cr=Math.cos(roll), sr=Math.sin(roll);
+  const r2 = [r[0]*cr+u[0]*sr, r[1]*cr+u[1]*sr, r[2]*cr+u[2]*sr];
+  const u2 = [-r[0]*sr+u[0]*cr, -r[1]*sr+u[1]*cr, -r[2]*sr+u[2]*cr];
+  const down = [-u2[0],-u2[1],-u2[2]];
+  return [
+    [r2[0], r2[1], r2[2]],
+    [down[0], down[1], down[2]],
+    [f[0], f[1], f[2]]
+  ];
+}
+function normalize3(v){ const n=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1; return [v[0]/n,v[1]/n,v[2]/n]; }
+
+function matVec3(M, v){
+  return [
+    M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],
+    M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],
+    M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]
+  ];
+}
+function matTranspose3(M){
+  return [[M[0][0],M[1][0],M[2][0]],[M[0][1],M[1][1],M[2][1]],[M[0][2],M[1][2],M[2][2]]];
+}
+
+// Projette un point monde Xw dans l'image, sous la pose caméra (R world->cam, t)
+// x_cam = R * Xw + t ; u = fx*x/z + cx ; v = fy*y/z + cy
+function projectPoint(K, R, t, Xw){
+  const Xc = matVec3(R, [Xw.x - t.x, Xw.y - t.y, Xw.z - t.z]);
+  if(Xc[2] <= 0.05) return null; // derrière la caméra
+  const u = K.fx * (Xc[0]/Xc[2]) + K.cx;
+  const v = K.fy * (Xc[1]/Xc[2]) + K.cy;
+  if(u<0 || u>K.w || v<0 || v>K.h) return null;
+  return {u, v, depth:Xc[2]};
+}
+
+/* ============================================================
+   GÉNÉRATION SYNTHÉTIQUE DES CORRESPONDANCES 2D-3D
+   (simule l'extraction SIFT + appariement avec le nuage COLMAP)
+   ============================================================ */
+function generateCorrespondences(plyPoints, truePose, K, opts){
+  opts = opts || {};
+  const pixelNoise = opts.pixelNoise !== undefined ? opts.pixelNoise : 1.8; // bruit de détection (px)
+  const outlierRatio = opts.outlierRatio !== undefined ? opts.outlierRatio : 0.85; // taux outliers brut (avant filtrage géo)
+  const maxVisible = opts.maxVisible || 260; // nb max de points visibles générés (limite calcul mobile)
+
+  const R = eulerToR(truePose.yaw, truePose.pitch, truePose.roll);
+
+  // 1) Trouver les points 3D visibles depuis la pose vraie (devant la caméra, dans le champ de vue)
+  const visible = [];
+  for(const p of plyPoints){
+    const proj = projectPoint(K, R, truePose, p);
+    if(proj) visible.push({p, proj});
+    if(visible.length >= maxVisible*1.4) break;
+  }
+  if(visible.length < 8){
+    return {correspondences:[], visibleCount:visible.length, K};
+  }
+  // sous-échantillonnage si trop de points
+  let pool = visible;
+  if(pool.length > maxVisible){
+    pool = [];
+    const step = visible.length/maxVisible;
+    for(let i=0;i<maxVisible;i++) pool.push(visible[Math.floor(i*step)]);
+  }
+
+  const nInliers = Math.max(8, Math.round(pool.length));
+  const correspondences = [];
+
+  // Inliers géométriquement corrects (bruit pixel gaussien réaliste)
+  for(const item of pool){
+    correspondences.push({
+      X: item.p, // point 3D (objet du nuage)
+      u: item.proj.u + randn()*pixelNoise,
+      v: item.proj.v + randn()*pixelNoise,
+      isTrueInlier: true
+    });
+  }
+
+  // Outliers : on ajoute des correspondances aberrantes pour atteindre outlierRatio
+  // soit en ré-assignant un point 2D observé à un AUTRE point 3D du nuage (confusion de façades similaires)
+  const nTotalTarget = Math.round(correspondences.length / (1-outlierRatio));
+  const nOutliers = Math.max(0, nTotalTarget - correspondences.length);
+  const allPts = plyPoints;
+  for(let i=0;i<nOutliers;i++){
+    // point 2D aléatoire dans l'image (faux appariement)
+    const u = randRange(0, K.w);
+    const v = randRange(0, K.h);
+    // mais associé à un point 3D pris n'importe où dans le nuage (y compris loin -> simule confusion bâtiment similaire)
+    const X = allPts[Math.floor(Math.random()*allPts.length)];
+    correspondences.push({X, u, v, isTrueInlier:false});
+  }
+
+  // mélange
+  for(let i=correspondences.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [correspondences[i],correspondences[j]] = [correspondences[j],correspondences[i]];
+  }
+
+  return {correspondences, visibleCount:visible.length, K, trueOutlierRatio: nOutliers/correspondences.length};
+}
+
+/* ============================================================
+   SOLVEUR DE POSE — DLT linéaire (estimation initiale type EPnP)
+   On résout pour R,t à partir d'un sous-ensemble de correspondances
+   via une linéarisation directe (moindres carrés linéaires), suivie
+   d'une orthonormalisation de R (projection sur SO(3)).
+   ============================================================ */
+
+function matMul3(A,B){
+  const C=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++){
+    let s=0; for(let k=0;k<3;k++) s+=A[i][k]*B[k][j];
+    C[i][j]=s;
+  }
+  return C;
+}
+function det3(M){
+  return M[0][0]*(M[1][1]*M[2][2]-M[1][2]*M[2][1])
+       - M[0][1]*(M[1][0]*M[2][2]-M[1][2]*M[2][0])
+       + M[0][2]*(M[1][0]*M[2][1]-M[1][1]*M[2][0]);
+}
+
+/* Diagonalisation de Jacobi cyclique pour une matrice symétrique NxN quelconque.
+   Retourne les vecteurs propres (colonnes de V) et valeurs propres (eigvals).
+   Robuste et suffisant pour les tailles utilisées ici (3x3 et 12x12). */
+function jacobiEigenN(Ain, n){
+  let A = Ain.map(r=>r.slice());
+  let V = Array.from({length:n},(_,i)=>Array.from({length:n},(_,j)=> i===j?1:0));
+  for(let sweep=0; sweep<100; sweep++){
+    let off=0;
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) off += A[i][j]*A[i][j];
+    if(off < 1e-20) break;
+    for(let p=0;p<n;p++){
+      for(let q=p+1;q<n;q++){
+        if(Math.abs(A[p][q]) < 1e-15) continue;
+        const theta = (A[q][q]-A[p][p])/(2*A[p][q]);
+        const t = (theta>=0?1:-1)/(Math.abs(theta)+Math.sqrt(theta*theta+1));
+        const c = 1/Math.sqrt(t*t+1), s = t*c;
+        const App=A[p][p], Aqq=A[q][q], Apq=A[p][q];
+        A[p][p] = c*c*App - 2*s*c*Apq + s*s*Aqq;
+        A[q][q] = s*s*App + 2*s*c*Apq + c*c*Aqq;
+        A[p][q]=0; A[q][p]=0;
+        for(let k=0;k<n;k++){
+          if(k!==p && k!==q){
+            const Akp=A[k][p], Akq=A[k][q];
+            A[k][p]=c*Akp-s*Akq; A[p][k]=A[k][p];
+            A[k][q]=s*Akp+c*Akq; A[q][k]=A[k][q];
+          }
+        }
+        for(let k=0;k<n;k++){
+          const Vkp=V[k][p], Vkq=V[k][q];
+          V[k][p]=c*Vkp-s*Vkq;
+          V[k][q]=s*Vkp+c*Vkq;
+        }
+      }
+    }
+  }
+  const eigvals = Array.from({length:n},(_,i)=>A[i][i]);
+  return {V, eigvals};
+}
+// Vecteur propre associé à la PLUS PETITE valeur propre (matrice symétrique NxN)
+function smallestEigenvectorN(M, n){
+  const {V, eigvals} = jacobiEigenN(M, n);
+  let minIdx=0, minVal=eigvals[0];
+  for(let i=1;i<n;i++) if(eigvals[i]<minVal){ minVal=eigvals[i]; minIdx=i; }
+  const v = V.map(row=>row[minIdx]);
+  return v;
+}
+
+// Orthonormalisation d'une matrice 3x3 proche de SO(3) par décomposition polaire,
+// elle-même obtenue via diagonalisation de Jacobi de M^T*M (3x3 symétrique).
+function svd3x3(A){
+  const At = matTranspose3(A);
+  const AtA = matMul3(At, A);
+  const {V, eigvals} = jacobiEigenN(AtA, 3);
+  const sqrtInvD = eigvals.map(e => 1/Math.sqrt(Math.max(e,1e-9)));
+  const Vt = matTranspose3(V);
+  // (A^T A)^{-1/2} = V * diag(1/sqrt(eigvals)) * V^T
+  const tmp = [[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++) tmp[i][j] = V[i][j]*sqrtInvD[j];
+  const AtAinvSqrt = matMul3(tmp, Vt);
+  // R orthonormal = A * (A^T A)^{-1/2}
+  let R = matMul3(A, AtAinvSqrt);
+  if(det3(R) < 0){
+    R[0][2]*=-1; R[1][2]*=-1; R[2][2]*=-1;
+  }
+  return R;
+}
+
+// Estimation linéaire initiale de (R,t) par DLT sur n>=6 correspondances (matrice de projection 3x4)
+function dltPose(corrSubset, K){
+  const n = corrSubset.length;
+  if(n < 6) return null;
+  // Système A * p = 0, p = vec(P) avec P matrice 3x4 (à un facteur d'échelle), normalisé par K^-1
+  const rows = [];
+  for(const c of corrSubset){
+    const xn = (c.u - K.cx)/K.fx; // coordonnées normalisées (caméra)
+    const yn = (c.v - K.cy)/K.fy;
+    const X=c.X.x, Y=c.X.y, Z=c.X.z;
+    rows.push([X,Y,Z,1, 0,0,0,0, -xn*X,-xn*Y,-xn*Z,-xn]);
+    rows.push([0,0,0,0, X,Y,Z,1, -yn*X,-yn*Y,-yn*Z,-yn]);
+  }
+  // Résolution par moindres carrés via A^T A (12x12) + vecteur propre du plus petit valeur propre
+  const AtA = mat12FromRows(rows);
+  const p = smallestEigenvectorN(AtA, 12);
+  if(!p) return null;
+  // p -> P (3x4)
+  const P = [[p[0],p[1],p[2],p[3]],[p[4],p[5],p[6],p[7]],[p[8],p[9],p[10],p[11]]];
+  let Rraw = [[P[0][0],P[0][1],P[0][2]],[P[1][0],P[1][1],P[1][2]],[P[2][0],P[2][1],P[2][2]]];
+  const rawScaleAbs = (vecNorm(Rraw[0])+vecNorm(Rraw[1])+vecNorm(Rraw[2]))/3;
+  if(rawScaleAbs < 1e-8) return null;
+  // Le DLT résout P à un signe global près (P et -P projettent la même image).
+  // On lève cette ambiguïté en exigeant une profondeur positive pour le premier point du sous-ensemble,
+  // calculée directement avec la relation normalisée Xc = Rraw*Xw + tcam (avant toute orthonormalisation).
+  const testPt = corrSubset[0].X;
+  const depthTestPos = (Rraw[2][0]/rawScaleAbs)*testPt.x + (Rraw[2][1]/rawScaleAbs)*testPt.y + (Rraw[2][2]/rawScaleAbs)*testPt.z + (P[2][3]/rawScaleAbs);
+  const scale = depthTestPos > 0 ? rawScaleAbs : -rawScaleAbs;
+  Rraw = Rraw.map(r=>r.map(v=>v/scale));
+  const tcam = [P[0][3]/scale, P[1][3]/scale, P[2][3]/scale];
+  const R = svd3x3(Rraw);
+  // Relation DLT normalisée : Xc = R*Xw + tcam  =>  tcam = -R*t_world  =>  t_world = -R^T*tcam
+  const Rt = matTranspose3(R);
+  const tWorld = matVec3(Rt, [-tcam[0], -tcam[1], -tcam[2]]);
+  const {yaw, pitch, roll} = rotationToEuler(R);
+  return {x:tWorld[0], y:tWorld[1], z:tWorld[2], yaw, pitch, roll, R};
+}
+
+function vecNorm(v){ return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); }
+
+function rotationToEuler(R){
+  // Inverse de eulerToR. forward (visée) = ligne2 de R = [sy*cp, cy*cp, sp]
+  const fwd = [R[2][0], R[2][1], R[2][2]];
+  const pitch = Math.asin(clamp(fwd[2], -1, 1));
+  const cp = Math.cos(pitch);
+  let yaw;
+  if(Math.abs(cp) > 1e-6) yaw = Math.atan2(fwd[0], fwd[1]);
+  else yaw = 0;
+  // right théorique (sans roll) à ce yaw
+  const rTheo = [Math.cos(yaw), -Math.sin(yaw), 0];
+  let upTheo = [
+    rTheo[1]*fwd[2]-rTheo[2]*fwd[1],
+    rTheo[2]*fwd[0]-rTheo[0]*fwd[2],
+    rTheo[0]*fwd[1]-rTheo[1]*fwd[0]
+  ];
+  upTheo = normalize3(upTheo);
+  const r2 = [R[0][0], R[0][1], R[0][2]]; // ligne0 = droite caméra réelle (après roll)
+  const cr = r2[0]*rTheo[0]+r2[1]*rTheo[1]+r2[2]*rTheo[2];
+  const sr = r2[0]*upTheo[0]+r2[1]*upTheo[1]+r2[2]*upTheo[2];
+  const roll = Math.atan2(sr, cr);
+  return {yaw, pitch, roll};
+}
+
+// Construit A^T A (12x12) à partir des lignes du système DLT (chaque ligne longueur 12)
+function mat12FromRows(rows){
+  const M = Array.from({length:12},()=>new Array(12).fill(0));
+  for(const r of rows){
+    for(let i=0;i<12;i++){
+      if(r[i]===0) continue;
+      for(let j=0;j<12;j++){
+        M[i][j] += r[i]*r[j];
+      }
+    }
+  }
+  return M;
+}
+
+/* ============================================================
+   COÛT DE REPROJECTION & RÉSIDUS
+   ============================================================ */
+function reprojErrors(pose, corr, K){
+  const R = eulerToR(pose.yaw, pose.pitch, pose.roll);
+  const errs = [];
+  for(const c of corr){
+    const Xc = matVec3(R, [c.X.x - pose.x, c.X.y - pose.y, c.X.z - pose.z]);
+    if(Xc[2] <= 0.05){ errs.push(1e4); continue; }
+    const u = K.fx*(Xc[0]/Xc[2]) + K.cx;
+    const v = K.fy*(Xc[1]/Xc[2]) + K.cy;
+    const du = u - c.u, dv = v - c.v;
+    errs.push(Math.sqrt(du*du+dv*dv));
+  }
+  return errs;
+}
+function medianOf(arr){
+  if(arr.length===0) return NaN;
+  const s = arr.slice().sort((a,b)=>a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length%2 ? s[mid] : (s[mid-1]+s[mid])/2;
+}
+
+/* ============================================================
+   LEVENBERG-MARQUARDT (fait maison) — 6 paramètres (x,y,z,yaw,pitch,roll)
+   Minimise : somme reprojection^2 (inliers) + lambda * ||t - t_APR||^2
+   ============================================================ */
+function levenbergMarquardtPose(initPose, inlierCorr, K, opts){
+  opts = opts || {};
+  const lambdaRecall = opts.lambdaRecall || 0; // poids du terme de rappel APR
+  const aprPose = opts.aprPose || null;
+  const maxIter = opts.maxIter || 25;
+  let pose = {x:initPose.x, y:initPose.y, z:initPose.z, yaw:initPose.yaw, pitch:initPose.pitch, roll:initPose.roll};
+  let mu = 1e-2; // damping LM
+  const h = 1e-4; // pas pour jacobienne numérique (différences finies) — translation en m
+  const hAngle = 1e-4; // pas pour angles (rad)
+  const params = ['x','y','z','yaw','pitch','roll'];
+  const steps = [h,h,h,hAngle,hAngle,hAngle];
+
+  function residuals(p){
+    const r = [];
+    const errs2d = reprojErrors(p, inlierCorr, K);
+    for(const e of errs2d) r.push(e);
+    if(lambdaRecall>0 && aprPose){
+      const sq = Math.sqrt(lambdaRecall);
+      r.push(sq*(p.x-aprPose.x));
+      r.push(sq*(p.y-aprPose.y));
+      r.push(sq*(p.z-aprPose.z));
+    }
+    return r;
+  }
+  function cost(p){
+    const r = residuals(p);
+    let s=0; for(const v of r) s+=v*v;
+    return s;
+  }
+
+  let curCost = cost(pose);
+  for(let iter=0; iter<maxIter; iter++){
+    const r0 = residuals(pose);
+    const m = r0.length;
+    // Jacobienne numérique m x 6
+    const J = Array.from({length:m},()=>new Array(6).fill(0));
+    for(let k=0;k<6;k++){
+      const pPlus = Object.assign({}, pose);
+      pPlus[params[k]] += steps[k];
+      const rPlus = residuals(pPlus);
+      for(let i=0;i<m;i++) J[i][k] = (rPlus[i]-r0[i])/steps[k];
+    }
+    // JtJ (6x6) et Jtr (6)
+    const JtJ = Array.from({length:6},()=>new Array(6).fill(0));
+    const Jtr = new Array(6).fill(0);
+    for(let i=0;i<m;i++){
+      for(let a=0;a<6;a++){
+        Jtr[a] += J[i][a]*r0[i];
+        for(let b=0;b<6;b++) JtJ[a][b] += J[i][a]*J[i][b];
+      }
+    }
+    // (JtJ + mu*I) delta = -Jtr
+    let improved = false;
+    for(let lmTry=0; lmTry<8; lmTry++){
+      const A = JtJ.map((row,i)=>row.map((v,j)=> i===j? v+mu*Math.max(v,1e-6) : v));
+      const delta = solveLinear6(A, Jtr.map(v=>-v));
+      if(!delta){ mu*=2; continue; }
+      const candidate = Object.assign({}, pose);
+      for(let k=0;k<6;k++) candidate[params[k]] += delta[k];
+      const newCost = cost(candidate);
+      if(isFinite(newCost) && newCost < curCost){
+        pose = candidate; curCost = newCost; mu = Math.max(mu*0.4, 1e-7);
+        improved = true;
+        break;
+      } else {
+        mu *= 3;
+      }
+    }
+    if(!improved) break;
+  }
+  return {pose, finalCost:curCost};
+}
+
+// Résolution d'un système linéaire 6x6 par élimination de Gauss avec pivot partiel
+function solveLinear6(A, b){
+  const n = 6;
+  const M = A.map((row,i)=>row.concat([b[i]]));
+  for(let col=0; col<n; col++){
+    let pivotRow = col;
+    let maxVal = Math.abs(M[col][col]);
+    for(let r=col+1;r<n;r++){
+      if(Math.abs(M[r][col]) > maxVal){ maxVal = Math.abs(M[r][col]); pivotRow = r; }
+    }
+    if(maxVal < 1e-12) return null;
+    if(pivotRow!==col){ const tmp=M[col]; M[col]=M[pivotRow]; M[pivotRow]=tmp; }
+    for(let r=0;r<n;r++){
+      if(r===col) continue;
+      const factor = M[r][col]/M[col][col];
+      for(let c=col;c<=n;c++) M[r][c] -= factor*M[col][c];
+    }
+  }
+  return M.map((row,i)=> row[n]/row[i]);
+}
+
+/* ============================================================
+   PIPELINE PG-PnP COMPLET (Étapes 1, 2, 3 de la thèse)
+   ============================================================ */
+function runPGPnP(correspondences, aprPose, K, params, log){
+  params = params || {};
+  const r = params.r !== undefined ? params.r : 60;          // rayon filtrage géo (m)
+  const epsilonRansac = params.epsilon !== undefined ? params.epsilon : 4; // px seuil inlier
+  const pSuccess = 0.99;
+  const nMin = 4;
+  const maxRansacIter = params.maxRansacIter || 1000;
+  const sigmaT = params.sigmaT || 20;
+
+  // σ_π : tolérance de pondération RANSAC, exprimée en pixels. Elle doit refléter le déplacement
+  // image typique induit par l'incertitude de position APR (σ_t) à la distance d'observation usuelle.
+  // σ_π_px ≈ f * σ_t / distance_typique. On utilise par défaut une distance typique = 2/3 du rayon
+  // de filtrage r (les points conservés après filtrage sont typiquement à cette distance de la caméra).
+  const typicalDist = Math.max(10, (params.typicalDistance !== undefined ? params.typicalDistance : r*0.7));
+  const sigmaPi = params.sigmaPi !== undefined ? params.sigmaPi : (K.fx * sigmaT / typicalDist);
+
+  const t0 = nowMs();
+
+  // --- Étape 1 : filtrage géographique ---
+  const filtered = correspondences.filter(c=>{
+    const d = Math.sqrt((c.X.x-aprPose.x)**2 + (c.X.y-aprPose.y)**2);
+    return d <= r;
+  });
+  log && log(`Étape 1 — Filtrage géo (r=${r}m) : ${correspondences.length} → ${filtered.length} correspondances`);
+
+  if(filtered.length < 6){
+    return {success:false, reason:'insufficient_correspondences_after_filter', tMs: nowMs()-t0, nFiltered:filtered.length};
+  }
+
+  // --- Étape 2 : poids de cohérence APR + RANSAC pondéré ---
+  const Rapr = eulerToR(aprPose.yaw, aprPose.pitch, aprPose.roll);
+  const weighted = filtered.map(c=>{
+    const proj = projectPoint(K, Rapr, aprPose, c.X);
+    let ri;
+    if(!proj){ ri = 999; } else {
+      const du=proj.u-c.u, dv=proj.v-c.v;
+      ri = Math.sqrt(du*du+dv*dv);
+    }
+    const w = Math.exp(-(ri*ri)/(2*sigmaPi*sigmaPi));
+    return Object.assign({}, c, {w, ri});
+  });
+  const sumW = weighted.reduce((s,c)=>s+c.w, 0) || 1;
+  const cumW = [];
+  { let acc=0; for(const c of weighted){ acc += c.w/sumW; cumW.push(acc); } }
+  function weightedPick(excludeSet){
+    for(let tries=0; tries<30; tries++){
+      const x = Math.random();
+      let lo=0, hi=cumW.length-1;
+      while(lo<hi){ const mid=(lo+hi)>>1; if(cumW[mid]<x) lo=mid+1; else hi=mid; }
+      if(!excludeSet.has(lo)) return lo;
+    }
+    return Math.floor(Math.random()*weighted.length);
+  }
+
+  let bestInliers = [];
+  let bestPose = null;
+  let estOutlierRatio = 0.5;
+  let nIterUsed = 0;
+  const sampleSize = 8; // taille pratique d'échantillon (> nMin théorique de 4) pour stabiliser le DLT simplifié
+  const nIterTarget = () => clamp(Math.ceil(Math.log(1-pSuccess)/Math.log(1-Math.pow(1-estOutlierRatio,nMin))), 5, maxRansacIter);
+
+  let iter = 0;
+  while(iter < nIterTarget() && iter < maxRansacIter){
+    iter++;
+    const idxSet = new Set();
+    const sampleIdx = [];
+    while(sampleIdx.length < sampleSize && sampleIdx.length < weighted.length){
+      const pick = weightedPick(idxSet);
+      idxSet.add(pick);
+      sampleIdx.push(pick);
+    }
+    if(sampleIdx.length < 6) continue;
+    const sample = sampleIdx.map(i=>weighted[i]);
+    let candidatePose = dltPose(sample, K);
+    if(!candidatePose) continue;
+    // Raffinement léger sur l'échantillon minimal (stabilise le DLT, équivalent pratique à EPnP+LM)
+    candidatePose = levenbergMarquardtPose(candidatePose, sample, K, {lambdaRecall:0, maxIter:8}).pose;
+    const errs = reprojErrors(candidatePose, weighted, K);
+    const inliers = [];
+    for(let i=0;i<weighted.length;i++){ if(errs[i] <= epsilonRansac) inliers.push(weighted[i]); }
+    if(inliers.length > bestInliers.length){
+      bestInliers = inliers;
+      bestPose = candidatePose;
+      estOutlierRatio = clamp(1 - inliers.length/weighted.length, 0.02, 0.95);
+    }
+  }
+  nIterUsed = iter;
+  log && log(`Étape 2 — RANSAC pondéré : ${nIterUsed} itérations, ${bestInliers.length} inliers / ${weighted.length}`);
+
+  if(!bestPose || bestInliers.length < 6){
+    return {success:false, reason:'ransac_failed', tMs: nowMs()-t0, nFiltered:filtered.length, nIterUsed};
+  }
+
+  // --- Étape 3 : affinement guidé (Levenberg-Marquardt + rappel APR) ---
+  const meanReprojErr = medianOf(reprojErrors(bestPose, bestInliers, K));
+  const lambda = (meanReprojErr*meanReprojErr) / (sigmaT*sigmaT);
+  const lm = levenbergMarquardtPose(bestPose, bestInliers, K, {lambdaRecall:lambda, aprPose, maxIter:30});
+  log && log(`Étape 3 — Affinement LM (λ=${lambda.toFixed(4)}) terminé`);
+
+  const tMs = nowMs() - t0;
+  const finalErrs = reprojErrors(lm.pose, bestInliers, K);
+  return {
+    success:true,
+    pose: lm.pose,
+    nFiltered: filtered.length,
+    nInliers: bestInliers.length,
+    nIterUsed,
+    lambda,
+    sigmaPiUsed: sigmaPi,
+    medianReprojPx: medianOf(finalErrs),
+    tMs
+  };
+}
+
+/* Variante "PnP classique" pour comparaison : pas de filtrage géo, RANSAC uniforme, pas de rappel */
+function runClassicPnP(correspondences, K, params, log){
+  params = params || {};
+  const epsilonRansac = params.epsilon !== undefined ? params.epsilon : 4;
+  const pSuccess = 0.99;
+  const nMin = 4;
+  const maxRansacIter = params.maxRansacIter || 4600;
+
+  const t0 = nowMs();
+  if(correspondences.length < 6){
+    return {success:false, reason:'insufficient_correspondences', tMs: nowMs()-t0};
+  }
+  let bestInliers = [];
+  let bestPose = null;
+  let estOutlierRatio = 0.85;
+  const sampleSize = 8;
+  const nIterTarget = () => clamp(Math.ceil(Math.log(1-pSuccess)/Math.log(1-Math.pow(1-estOutlierRatio,nMin))), 5, maxRansacIter);
+  let iter = 0;
+  while(iter < nIterTarget() && iter < maxRansacIter){
+    iter++;
+    const sampleIdx = new Set();
+    while(sampleIdx.size < sampleSize && sampleIdx.size < correspondences.length){
+      sampleIdx.add(Math.floor(Math.random()*correspondences.length));
+    }
+    const sample = Array.from(sampleIdx).map(i=>correspondences[i]);
+    let candidatePose = dltPose(sample, K);
+    if(!candidatePose) continue;
+    candidatePose = levenbergMarquardtPose(candidatePose, sample, K, {lambdaRecall:0, maxIter:8}).pose;
+    const errs = reprojErrors(candidatePose, correspondences, K);
+    const inliers = [];
+    for(let i=0;i<correspondences.length;i++){ if(errs[i] <= epsilonRansac) inliers.push(correspondences[i]); }
+    if(inliers.length > bestInliers.length){
+      bestInliers = inliers; bestPose = candidatePose;
+      estOutlierRatio = clamp(1 - inliers.length/correspondences.length, 0.02, 0.97);
+    }
+  }
+  log && log(`PnP classique : ${iter} itérations RANSAC uniforme, ${bestInliers.length} inliers / ${correspondences.length}`);
+  if(!bestPose || bestInliers.length < 6){
+    return {success:false, reason:'ransac_failed', tMs: nowMs()-t0, nIterUsed:iter};
+  }
+  const lm = levenbergMarquardtPose(bestPose, bestInliers, K, {lambdaRecall:0, maxIter:30});
+  const tMs = nowMs() - t0;
+  const finalErrs = reprojErrors(lm.pose, bestInliers, K);
+  return {
+    success:true, pose:lm.pose, nInliers:bestInliers.length, nIterUsed:iter,
+    medianReprojPx: medianOf(finalErrs), tMs
+  };
+}
+
+function poseError(estPose, truePose){
+  const dPos = Math.sqrt((estPose.x-truePose.x)**2 + (estPose.y-truePose.y)**2 + (estPose.z-truePose.z)**2);
+  const Re = eulerToR(estPose.yaw, estPose.pitch, estPose.roll);
+  const Rt = eulerToR(truePose.yaw, truePose.pitch, truePose.roll);
+  const RtT = matTranspose3(Rt);
+  const Rrel = matMul3(RtT, Re);
+  const traceVal = Rrel[0][0]+Rrel[1][1]+Rrel[2][2];
+  const angle = Math.acos(clamp((traceVal-1)/2, -1, 1)) * 180/Math.PI;
+  return {posError: dPos, angError: angle};
+}
+
+/* ============================================================
+   GÉOLOCALISATION GPS
+   ============================================================ */
+function getGPSPosition(){
+  return new Promise((resolve, reject)=>{
+    if(!navigator.geolocation){ reject(new Error('Géolocalisation non supportée par ce navigateur')); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({lat:pos.coords.latitude, lon:pos.coords.longitude, acc:pos.coords.accuracy}),
+      err => reject(err),
+      {enableHighAccuracy:true, timeout:12000, maximumAge:0}
+    );
+  });
+}
+
+/* ============================================================
+   GESTION DE L'HISTORIQUE / EXPORT CSV
+   ============================================================ */
+function pushHistoryRecord(rec){
+  STATE.runCounter += 1;
+  rec.id = STATE.runCounter;
+  rec.timestamp = new Date().toISOString();
+  STATE.history.push(rec);
+}
+
+function historyToCSV(){
+  const headers = [
+    'id','timestamp','methode','succes',
+    'erreur_position_m','erreur_orientation_deg','erreur_reproj_mediane_px',
+    'temps_calcul_ms','n_correspondances_total','n_filtrees_geo','n_inliers',
+    'n_iterations_ransac','lambda_rappel',
+    'apr_x','apr_y','apr_z','vraie_x','vraie_y','vraie_z',
+    'rayon_filtrage_m','sigma_pi_px','epsilon_ransac_px'
+  ];
+  const lines = [headers.join(';')];
+  for(const r of STATE.history){
+    const row = [
+      r.id, r.timestamp, r.methode, r.succes,
+      fmt(r.erreur_position_m,3), fmt(r.erreur_orientation_deg,3), fmt(r.erreur_reproj_mediane_px,3),
+      fmt(r.temps_calcul_ms,2), r.n_correspondances_total, r.n_filtrees_geo, r.n_inliers,
+      r.n_iterations_ransac, fmt(r.lambda_rappel,5),
+      fmt(r.apr_x,3), fmt(r.apr_y,3), fmt(r.apr_z,3),
+      fmt(r.vraie_x,3), fmt(r.vraie_y,3), fmt(r.vraie_z,3),
+      r.rayon_filtrage_m, r.sigma_pi_px, r.epsilon_ransac_px
+    ];
+    lines.push(row.join(';'));
+  }
+  return lines.join('\n');
+}
+
+function downloadCSV(){
+  if(STATE.history.length === 0){ toast('Aucune localisation enregistrée pour le moment'); return; }
+  const csv = historyToCSV();
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g,'-');
+  a.href = url;
+  a.download = `pgpnp_resultats_${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('CSV téléchargé ('+STATE.history.length+' lignes)');
+}
+
+function clearHistory(){
+  STATE.history = [];
+  STATE.runCounter = 0;
+  toast('Historique effacé');
+  render();
+}
+
+/* ============================================================
+   INTERFACE — NAVIGATION
+   ============================================================ */
+const TABS = [
+  {id:'setup', label:'Config', icon:'⚙️'},
+  {id:'capture', label:'Localiser', icon:'📷'},
+  {id:'results', label:'Résultats', icon:'📊'},
+  {id:'history', label:'Historique', icon:'🗂️'}
+];
+
+function setView(v){
+  STATE.view = v;
+  render();
+}
+
+function renderTabbar(){
+  const bar = document.getElementById('tabbar');
+  bar.innerHTML = '';
+  for(const t of TABS){
+    const btn = document.createElement('button');
+    btn.className = STATE.view===t.id ? 'active' : '';
+    btn.innerHTML = `<span style="font-size:17px;">${t.icon}</span><span>${t.label}</span>`;
+    btn.onclick = ()=>setView(t.id);
+    bar.appendChild(btn);
+  }
+}
+
+function render(){
+  renderTabbar();
+  const main = document.getElementById('main');
+  main.innerHTML = '';
+  if(STATE.view === 'setup') main.appendChild(renderSetupView());
+  else if(STATE.view === 'capture') main.appendChild(renderCaptureView());
+  else if(STATE.view === 'results') main.appendChild(renderResultsView());
+  else if(STATE.view === 'history') main.appendChild(renderHistoryView());
+}
+
+function el(html){
+  const d = document.createElement('div');
+  d.innerHTML = html.trim();
+  return d.firstElementChild;
+}
+
+/* ---------- VUE SETUP ---------- */
+function renderSetupView(){
+  const wrap = el(`<section class="view active"></section>`);
+
+  // Carte nuage de points
+  const plyCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">1</span> Nuage de points COLMAP (.ply)</h2>
+      <div class="muted" style="margin-bottom:10px;">Importez le nuage 3D reconstruit par COLMAP pour la zone du campus. Formats ASCII et binaire (little-endian) supportés.</div>
+      <input type="file" accept=".ply" id="plyInput" style="display:none;">
+      <button class="btn secondary" id="plyBtn">📂 Choisir un fichier .ply</button>
+      <div id="plyStatus" style="margin-top:10px;"></div>
+    </div>
+  `);
+  if(STATE.ply){
+    const st = plyCard.querySelector('#plyStatus');
+    st.innerHTML = `
+      <div class="badge-row">
+        <span class="pill ok">✓ ${STATE.ply.count.toLocaleString('fr-FR')} points</span>
+        <span class="pill">${STATE.ply.format}</span>
+      </div>
+      <div class="muted">Étendue : ${fmt(STATE.ply.bounds.maxX-STATE.ply.bounds.minX,1)}×${fmt(STATE.ply.bounds.maxY-STATE.ply.bounds.minY,1)}×${fmt(STATE.ply.bounds.maxZ-STATE.ply.bounds.minZ,1)} m</div>
+    `;
+  }
+  wrap.appendChild(plyCard);
+  setTimeout(()=>{
+    const input = document.getElementById('plyInput');
+    document.getElementById('plyBtn').onclick = ()=>input.click();
+    input.onchange = async (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      document.getElementById('plyStatus').innerHTML = `<div class="muted">⏳ Lecture du fichier (${(file.size/1024/1024).toFixed(1)} Mo)…</div>`;
+      try{
+        const buf = await file.arrayBuffer();
+        const ply = await parsePLY(buf);
+        STATE.ply = ply;
+        toast(`Nuage chargé : ${ply.count.toLocaleString('fr-FR')} points`);
+        render();
+      } catch(err){
+        document.getElementById('plyStatus').innerHTML = `<div class="pill bad">✗ Erreur : ${err.message}</div>`;
+      }
+    };
+  },0);
+
+  // Carte GPS
+  const gpsCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">2</span> Position GPS de référence</h2>
+      <div class="muted" style="margin-bottom:10px;">Utilisée comme position « vraie » de référence. La pose APR simulée (Niveau 1) sera tirée aléatoirement dans un rayon de moins de 50&nbsp;m autour de cette position, pour reproduire l'imprécision typique de l'APR.</div>
+      <button class="btn secondary" id="gpsBtn">📍 Obtenir ma position GPS</button>
+      <div id="gpsStatus" style="margin-top:10px;"></div>
+    </div>
+  `);
+  if(STATE.gps){
+    const st = gpsCard.querySelector('#gpsStatus');
+    st.innerHTML = `
+      <div class="badge-row">
+        <span class="pill ok">✓ GPS acquis</span>
+        <span class="pill">±${fmt(STATE.gps.acc,1)} m</span>
+      </div>
+      <div class="muted">Lat ${fmt(STATE.gps.lat,6)}, Lon ${fmt(STATE.gps.lon,6)}</div>
+    `;
+  }
+  wrap.appendChild(gpsCard);
+  setTimeout(()=>{
+    document.getElementById('gpsBtn').onclick = async ()=>{
+      document.getElementById('gpsStatus').innerHTML = `<div class="muted">⏳ Acquisition GPS…</div>`;
+      try{
+        const gps = await getGPSPosition();
+        STATE.gps = gps;
+        toast('Position GPS acquise');
+        render();
+      } catch(err){
+        document.getElementById('gpsStatus').innerHTML = `<div class="pill bad">✗ ${err.message || 'GPS indisponible'}</div>`;
+      }
+    };
+  },0);
+
+  // Carte paramètres PG-PnP
+  const paramCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">⚙</span> Paramètres PG-PnP</h2>
+      <div class="row"><label>Rayon filtrage r (m)</label><input type="number" id="pRadius" value="60" step="5" min="10"></div>
+      <div class="row"><label>Seuil RANSAC ε (px)</label><input type="number" id="pEpsilon" value="4" step="0.5" min="1"></div>
+      <div class="row"><label>σ_t erreur APR (m)</label><input type="number" id="pSigmaT" value="20" step="1" min="1"></div>
+      <div class="row" style="align-items:flex-start;">
+        <label style="display:flex;align-items:center;gap:6px;min-width:auto;">
+          <input type="checkbox" id="pSigmaPiAuto" checked style="width:16px;height:16px;">
+          σ_π automatique
+        </label>
+      </div>
+      <div class="row" id="sigmaPiManualRow" style="display:none;">
+        <label>σ_π pondération (px)</label><input type="number" id="pSigmaPi" value="15" step="1" min="1">
+      </div>
+      <div class="divider"></div>
+      <div class="muted">σ_π (tolérance de pondération RANSAC) dépend fortement de la distance d'observation : en mode automatique, elle est recalculée à chaque run comme f·σ_t/d, où d est la distance typique des points conservés après filtrage géographique. Le mode manuel utilise une valeur fixe (15&nbsp;px par défaut dans le manuscrit), pertinente surtout pour de petits écarts APR.</div>
+    </div>
+  `);
+  wrap.appendChild(paramCard);
+  setTimeout(()=>{
+    const ids = ['pRadius','pEpsilon','pSigmaT'];
+    const keys = {pRadius:'r', pEpsilon:'epsilon', pSigmaT:'sigmaT'};
+    if(!STATE.params) STATE.params = {r:60, sigmaPiAuto:true, sigmaPi:15, epsilon:4, sigmaT:20};
+    for(const id of ids){
+      const node = document.getElementById(id);
+      node.value = STATE.params[keys[id]];
+      node.oninput = ()=>{ STATE.params[keys[id]] = parseFloat(node.value)||0; };
+    }
+    const autoBox = document.getElementById('pSigmaPiAuto');
+    const manualRow = document.getElementById('sigmaPiManualRow');
+    const sigmaPiInput = document.getElementById('pSigmaPi');
+    autoBox.checked = STATE.params.sigmaPiAuto !== false;
+    manualRow.style.display = autoBox.checked ? 'none' : 'flex';
+    sigmaPiInput.value = STATE.params.sigmaPi || 15;
+    autoBox.onchange = ()=>{
+      STATE.params.sigmaPiAuto = autoBox.checked;
+      manualRow.style.display = autoBox.checked ? 'none' : 'flex';
+      if(autoBox.checked) delete STATE.params.sigmaPiManualValue;
+    };
+    sigmaPiInput.oninput = ()=>{ STATE.params.sigmaPi = parseFloat(sigmaPiInput.value)||15; };
+  },0);
+
+  const readyCard = el(`
+    <div class="card" style="text-align:center;">
+      ${STATE.ply && STATE.gps
+        ? `<span class="pill ok">✓ Prêt — rendez-vous dans l'onglet « Localiser »</span>`
+        : `<span class="pill warn">⚠ Importez le nuage .ply et obtenez le GPS pour continuer</span>`}
+    </div>
+  `);
+  wrap.appendChild(readyCard);
+
+  return wrap;
+}
+
+/* ---------- VUE CAPTURE ---------- */
+let videoEl = null;
+let videoStream = null;
+
+async function startCamera(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment', width:{ideal:1280}, height:{ideal:720}}, audio:false
+    });
+    videoStream = stream;
+    if(videoEl){ videoEl.srcObject = stream; await videoEl.play().catch(()=>{}); }
+    return true;
+  } catch(err){
+    toast('Caméra indisponible : '+(err.message||'permission refusée'));
+    return false;
+  }
+}
+function stopCamera(){
+  if(videoStream){ videoStream.getTracks().forEach(t=>t.stop()); videoStream=null; }
+}
+
+function renderCaptureView(){
+  const wrap = el(`<section class="view active"></section>`);
+
+  if(!STATE.ply || !STATE.gps){
+    wrap.appendChild(el(`
+      <div class="card">
+        <h2>⚠ Configuration incomplète</h2>
+        <div class="muted">Merci d'importer le nuage de points .ply et d'acquérir la position GPS dans l'onglet « Config » avant de lancer une localisation.</div>
+        <div style="height:10px;"></div>
+        <button class="btn" id="goSetup">Aller à la configuration</button>
+      </div>
+    `));
+    setTimeout(()=>{ document.getElementById('goSetup').onclick = ()=>setView('setup'); },0);
+    return wrap;
+  }
+
+  const camCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">📷</span> Capture image requête</h2>
+      <div class="cam-wrap">
+        <video id="camVideo" autoplay playsinline muted></video>
+        <div class="cam-overlay">
+          <svg viewBox="0 0 100 100" fill="none" stroke="white" stroke-width="2">
+            <rect x="15" y="15" width="70" height="70" rx="4"/>
+            <line x1="50" y1="10" x2="50" y2="20"/><line x1="50" y1="80" x2="50" y2="90"/>
+            <line x1="10" y1="50" x2="20" y2="50"/><line x1="80" y1="50" x2="90" y2="50"/>
+          </svg>
+        </div>
+      </div>
+      <div style="height:10px;"></div>
+      <div class="muted">Visez un bâtiment du campus. La pose caméra réelle (inconnue du système) sera simulée à partir de votre position GPS + une orientation aléatoire plausible, pour générer des correspondances 2D–3D réalistes avec le nuage COLMAP.</div>
+    </div>
+  `);
+  wrap.appendChild(camCard);
+
+  const aprCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">🛰️</span> Pose APR simulée (Niveau 1)</h2>
+      <div id="aprInfo" class="muted">Cliquez sur « Nouvelle estimation APR » pour générer une pose Niveau 1 bruitée autour de votre position GPS.</div>
+      <div style="height:8px;"></div>
+      <button class="btn secondary" id="newAprBtn">🎲 Nouvelle estimation APR (&lt; 50 m)</button>
+    </div>
+  `);
+  wrap.appendChild(aprCard);
+
+  const runCard = el(`
+    <div class="card">
+      <h2><span class="step-badge">▶</span> Lancer la localisation</h2>
+      <div class="muted" style="margin-bottom:10px;">Exécute le pipeline PG-PnP complet (filtrage géographique → RANSAC pondéré → affinement guidé) ainsi qu'un PnP classique pour comparaison.</div>
+      <button class="btn" id="runBtn" disabled>🚀 Localiser</button>
+      <div id="runProgress" style="display:none;">
+        <div class="progress-bar"><div id="progFill"></div></div>
+        <div class="muted" id="progLabel">…</div>
+      </div>
+      <div class="log" id="runLog" style="display:none;margin-top:10px;"></div>
+    </div>
+  `);
+  wrap.appendChild(runCard);
+
+  setTimeout(()=>{
+    videoEl = document.getElementById('camVideo');
+    startCamera();
+
+    function refreshAprInfo(){
+      const info = document.getElementById('aprInfo');
+      const runBtn = document.getElementById('runBtn');
+      if(STATE.aprPose && STATE.truePose){
+        const d = Math.sqrt((STATE.aprPose.x-STATE.truePose.x)**2 + (STATE.aprPose.y-STATE.truePose.y)**2);
+        info.innerHTML = `<span class="pill ok">✓ Pose APR générée</span> écart simulé avec la position vraie : <b>${fmt(d,1)} m</b>`;
+        runBtn.disabled = false;
+      }
+    }
+    refreshAprInfo();
+
+    document.getElementById('newAprBtn').onclick = ()=>{
+      const pts = STATE.ply.points;
+
+      // Choisir la position vraie près d'une zone DENSE du nuage (l'utilisateur se place naturellement
+      // face à un bâtiment/façade reconstruite, pas au milieu d'une zone vide ou clairsemée).
+      // On échantillonne plusieurs candidats et on retient celui ayant le plus de voisins dans un rayon
+      // typique d'observation (15-60m), ce qui maximise la probabilité d'une scène exploitable.
+      const nCandidates = 25;
+      const probeStep = Math.max(1, Math.floor(pts.length/2000));
+      let bestCandidate = null, bestScore = -1;
+      for(let c=0;c<nCandidates;c++){
+        const cand = pts[Math.floor(Math.random()*pts.length)];
+        let score = 0;
+        for(let i=0;i<pts.length;i+=probeStep){
+          const p = pts[i];
+          const d = Math.sqrt((p.x-cand.x)**2+(p.y-cand.y)**2);
+          if(d>=12 && d<=65) score++;
+        }
+        if(score > bestScore){ bestScore = score; bestCandidate = cand; }
+      }
+      const refPt = bestCandidate || pts[Math.floor(Math.random()*pts.length)];
+      const trueX = refPt.x + randRange(-3,3);
+      const trueY = refPt.y + randRange(-3,3);
+      const trueZ = refPt.z + 1.6; // hauteur caméra ~1.6m au-dessus du point de référence (sol approx.)
+
+      // Orientation : viser le barycentre des points du nuage situés à 15-60m de la position vraie,
+      // pour garantir qu'une zone dense (façade) soit dans le champ de vue — comme le ferait naturellement
+      // un utilisateur visant un bâtiment du campus avec son téléphone.
+      let sx=0, sy=0, n=0;
+      const sampleStep = Math.max(1, Math.floor(pts.length/3000));
+      for(let i=0;i<pts.length;i+=sampleStep){
+        const p = pts[i];
+        const d = Math.sqrt((p.x-trueX)**2+(p.y-trueY)**2);
+        if(d>=12 && d<=70){ sx+=p.x; sy+=p.y; n++; }
+      }
+      let yaw;
+      if(n>3){
+        const targetX = sx/n, targetY = sy/n;
+        yaw = Math.atan2(targetX-trueX, targetY-trueY); // yaw=0 vise +Y (Nord), cf. convention eulerToR
+      } else {
+        yaw = randRange(0, 2*Math.PI);
+      }
+
+      STATE.truePose = {x:trueX, y:trueY, z:trueZ, yaw, pitch: randRange(-0.05,0.05), roll: randRange(-0.03,0.03)};
+
+      // Pose APR = vraie + bruit borné à <50m sur la position. L'orientation APR (boussole/IMU du téléphone)
+      // reste, elle, relativement fiable : seul un petit bruit angulaire lui est appliqué.
+      let dx, dy, dz, dist;
+      do{
+        dx = randn()*15; dy = randn()*15; dz = randn()*2;
+        dist = Math.sqrt(dx*dx+dy*dy);
+      } while(dist >= 49);
+      STATE.aprPose = {
+        x: trueX+dx, y: trueY+dy, z: trueZ+dz,
+        yaw: yaw + randn()*0.15, pitch: STATE.truePose.pitch + randn()*0.02, roll: STATE.truePose.roll + randn()*0.02
+      };
+      toast('Nouvelle pose APR générée');
+      refreshAprInfo();
+    };
+
+    document.getElementById('runBtn').onclick = async ()=>{
+      await executeLocalization();
+    };
+  },0);
+
+  return wrap;
+}
+
+async function executeLocalization(){
+  const progWrap = document.getElementById('runProgress');
+  const progFill = document.getElementById('progFill');
+  const progLabel = document.getElementById('progLabel');
+  const logBox = document.getElementById('runLog');
+  const runBtn = document.getElementById('runBtn');
+  runBtn.disabled = true;
+  progWrap.style.display = 'block';
+  logBox.style.display = 'block';
+  logBox.textContent = '';
+  const logLines = [];
+  function log(msg){ logLines.push(msg); logBox.textContent = logLines.join('\n'); logBox.scrollTop = logBox.scrollHeight; }
+
+  function setProgress(pct, label){ progFill.style.width = pct+'%'; progLabel.textContent = label; }
+
+  setProgress(10, 'Capture de l\'image requête…');
+  await sleep(150);
+
+  // Capturer une frame vidéo (juste pour affichage / réalisme, pas utilisé dans le calcul géométrique)
+  let snapshotDataUrl = null;
+  try{
+    if(videoEl && videoEl.videoWidth){
+      const c = document.createElement('canvas');
+      c.width = videoEl.videoWidth; c.height = videoEl.videoHeight;
+      c.getContext('2d').drawImage(videoEl,0,0);
+      snapshotDataUrl = c.toDataURL('image/jpeg', 0.7);
+    }
+  }catch(e){}
+
+  setProgress(25, 'Génération des correspondances 2D–3D…');
+  await sleep(150);
+  const K = buildK(1280, 720);
+  const genStart = nowMs();
+  const gen = generateCorrespondences(STATE.ply.points, STATE.truePose, K, {
+    pixelNoise: 1.8, outlierRatio: 0.85, maxVisible: 240
+  });
+  log(`Points visibles depuis la pose vraie : ${gen.visibleCount}`);
+  log(`Correspondances générées : ${gen.correspondences.length} (taux outliers brut ≈ ${fmt((gen.trueOutlierRatio||0)*100,0)}%)`);
+
+  if(gen.correspondences.length < 10){
+    setProgress(100,'Échec');
+    log('✗ Pas assez de points visibles depuis cette pose. Essayez « Nouvelle estimation APR » à nouveau (le nuage ne couvre peut-être pas cette zone).');
+    toast('Échec : trop peu de points visibles');
+    runBtn.disabled = false;
+    return;
+  }
+
+  setProgress(45, 'PG-PnP — filtrage géographique + RANSAC pondéré…');
+  await sleep(150);
+  const rawParams = STATE.params || {r:60, sigmaPiAuto:true, sigmaPi:15, epsilon:4, sigmaT:20};
+  const params = Object.assign({}, rawParams);
+  if(params.sigmaPiAuto === false){
+    // mode manuel : on force la valeur choisie, runPGPnP ne recalculera pas
+  } else {
+    delete params.sigmaPi; // mode auto : laisser runPGPnP calculer sigma_pi de façon adaptative
+  }
+  params.maxRansacIter = 1500;
+  const pgResult = runPGPnP(gen.correspondences, STATE.aprPose, K, params, log);
+
+  setProgress(70, 'PnP classique (comparaison)…');
+  await sleep(150);
+  const classicResult = runClassicPnP(gen.correspondences, K, {epsilon: params.epsilon, maxRansacIter: 4000}, log);
+
+  setProgress(90, 'Calcul des erreurs de pose…');
+  await sleep(120);
+
+  const record = {
+    snapshot: snapshotDataUrl,
+    truePose: STATE.truePose,
+    aprPose: STATE.aprPose,
+    nCorrTotal: gen.correspondences.length,
+    pg: pgResult, classic: classicResult,
+    params
+  };
+  if(pgResult.success){
+    const e = poseError(pgResult.pose, STATE.truePose);
+    record.pgError = e;
+  }
+  if(classicResult.success){
+    const e = poseError(classicResult.pose, STATE.truePose);
+    record.classicError = e;
+  }
+
+  // Historique / CSV — une ligne par méthode
+  if(pgResult.success){
+    pushHistoryRecord({
+      methode:'PG-PnP', succes:true,
+      erreur_position_m: record.pgError.posError, erreur_orientation_deg: record.pgError.angError,
+      erreur_reproj_mediane_px: pgResult.medianReprojPx,
+      temps_calcul_ms: pgResult.tMs, n_correspondances_total: gen.correspondences.length,
+      n_filtrees_geo: pgResult.nFiltered, n_inliers: pgResult.nInliers,
+      n_iterations_ransac: pgResult.nIterUsed, lambda_rappel: pgResult.lambda,
+      apr_x: STATE.aprPose.x, apr_y: STATE.aprPose.y, apr_z: STATE.aprPose.z,
+      vraie_x: STATE.truePose.x, vraie_y: STATE.truePose.y, vraie_z: STATE.truePose.z,
+      rayon_filtrage_m: params.r, sigma_pi_px: pgResult.sigmaPiUsed, epsilon_ransac_px: params.epsilon
+    });
+  } else {
+    pushHistoryRecord({
+      methode:'PG-PnP', succes:false,
+      erreur_position_m:null, erreur_orientation_deg:null, erreur_reproj_mediane_px:null,
+      temps_calcul_ms: pgResult.tMs, n_correspondances_total: gen.correspondences.length,
+      n_filtrees_geo: pgResult.nFiltered||0, n_inliers:0,
+      n_iterations_ransac: pgResult.nIterUsed||0, lambda_rappel:null,
+      apr_x: STATE.aprPose.x, apr_y: STATE.aprPose.y, apr_z: STATE.aprPose.z,
+      vraie_x: STATE.truePose.x, vraie_y: STATE.truePose.y, vraie_z: STATE.truePose.z,
+      rayon_filtrage_m: params.r, sigma_pi_px: pgResult.sigmaPiUsed, epsilon_ransac_px: params.epsilon
+    });
+  }
+  if(classicResult.success){
+    pushHistoryRecord({
+      methode:'PnP classique', succes:true,
+      erreur_position_m: record.classicError.posError, erreur_orientation_deg: record.classicError.angError,
+      erreur_reproj_mediane_px: classicResult.medianReprojPx,
+      temps_calcul_ms: classicResult.tMs, n_correspondances_total: gen.correspondences.length,
+      n_filtrees_geo: gen.correspondences.length, n_inliers: classicResult.nInliers,
+      n_iterations_ransac: classicResult.nIterUsed, lambda_rappel: 0,
+      apr_x: STATE.aprPose.x, apr_y: STATE.aprPose.y, apr_z: STATE.aprPose.z,
+      vraie_x: STATE.truePose.x, vraie_y: STATE.truePose.y, vraie_z: STATE.truePose.z,
+      rayon_filtrage_m: null, sigma_pi_px: null, epsilon_ransac_px: params.epsilon
+    });
+  } else {
+    pushHistoryRecord({
+      methode:'PnP classique', succes:false,
+      erreur_position_m:null, erreur_orientation_deg:null, erreur_reproj_mediane_px:null,
+      temps_calcul_ms: classicResult.tMs, n_correspondances_total: gen.correspondences.length,
+      n_filtrees_geo: gen.correspondences.length, n_inliers:0,
+      n_iterations_ransac: classicResult.nIterUsed||0, lambda_rappel:0,
+      apr_x: STATE.aprPose.x, apr_y: STATE.aprPose.y, apr_z: STATE.aprPose.z,
+      vraie_x: STATE.truePose.x, vraie_y: STATE.truePose.y, vraie_z: STATE.truePose.z,
+      rayon_filtrage_m: null, sigma_pi_px: null, epsilon_ransac_px: params.epsilon
+    });
+  }
+
+  STATE.lastResult = record;
+  setProgress(100, 'Terminé ✓');
+  log('✓ Localisation enregistrée dans l\'historique (CSV prêt à l\'export)');
+  toast('Localisation terminée');
+  setTimeout(()=>setView('results'), 500);
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+/* ---------- VUE RÉSULTATS ---------- */
+function renderResultsView(){
+  const wrap = el(`<section class="view active"></section>`);
+  const rec = STATE.lastResult;
+
+  if(!rec){
+    wrap.appendChild(el(`
+      <div class="card">
+        <h2>📊 Aucun résultat pour le moment</h2>
+        <div class="muted">Lancez une localisation depuis l'onglet « Localiser » pour voir les résultats apparaître ici.</div>
+        <div style="height:10px;"></div>
+        <button class="btn" id="goCapture">Aller à Localiser</button>
+      </div>
+    `));
+    setTimeout(()=>{ document.getElementById('goCapture').onclick = ()=>setView('capture'); },0);
+    return wrap;
+  }
+
+  if(rec.snapshot){
+    wrap.appendChild(el(`
+      <div class="card">
+        <h2>📷 Image requête capturée</h2>
+        <img src="${rec.snapshot}" style="width:100%;border-radius:10px;">
+      </div>
+    `));
+  }
+
+  // Comparaison principale
+  const pgOk = rec.pg.success, clOk = rec.classic.success;
+  const pgPos = pgOk ? rec.pgError.posError : null;
+  const clPos = clOk ? rec.classicError.posError : null;
+  const maxPos = Math.max(pgPos||0, clPos||0, 1);
+
+  const compareCard = el(`
+    <div class="card">
+      <h2>⚖️ PG-PnP vs PnP classique</h2>
+      <div class="compare-bars">
+        <div class="bar-col">
+          <div class="bar-val" style="color:${clOk?'var(--bad)':'var(--muted)'}">${clOk?fmt(clPos,2)+' m':'échec'}</div>
+          <div class="bar classic" style="height:${clOk?clamp((clPos/maxPos)*100,4,100):4}%"></div>
+          <div class="bar-label">PnP classique<br>(RANSAC uniforme)</div>
+        </div>
+        <div class="bar-col">
+          <div class="bar-val" style="color:${pgOk?'var(--good)':'var(--muted)'}">${pgOk?fmt(pgPos,2)+' m':'échec'}</div>
+          <div class="bar pgpnp" style="height:${pgOk?clamp((pgPos/maxPos)*100,4,100):4}%"></div>
+          <div class="bar-label">PG-PnP<br>(contribution)</div>
+        </div>
+      </div>
+      <div class="muted" style="text-align:center;margin-top:6px;">Erreur de position par rapport à la pose vraie simulée</div>
+    </div>
+  `);
+  wrap.appendChild(compareCard);
+
+  // Détail PG-PnP
+  const pgCard = el(`
+    <div class="card">
+      <h2><span class="step-badge" style="background:var(--good);">PG-PnP</span> Détails</h2>
+      ${pgOk ? `
+        <div class="statgrid">
+          <div class="stat"><div class="v">${fmt(rec.pgError.posError,2)} m</div><div class="l">Erreur position</div></div>
+          <div class="stat"><div class="v">${fmt(rec.pgError.angError,2)}°</div><div class="l">Erreur orientation</div></div>
+          <div class="stat"><div class="v">${fmt(rec.pg.tMs,1)} ms</div><div class="l">Temps de calcul</div></div>
+          <div class="stat"><div class="v">${rec.pg.nInliers}</div><div class="l">Inliers</div></div>
+        </div>
+        <div class="divider"></div>
+        <table>
+          <tr><td class="muted">Correspondances totales</td><td>${rec.nCorrTotal}</td></tr>
+          <tr><td class="muted">Après filtrage géo (r=${rec.params.r}m)</td><td>${rec.pg.nFiltered}</td></tr>
+          <tr><td class="muted">Itérations RANSAC pondéré</td><td>${rec.pg.nIterUsed}</td></tr>
+          <tr><td class="muted">λ (terme de rappel)</td><td>${fmt(rec.pg.lambda,5)}</td></tr>
+          <tr><td class="muted">Erreur reprojection médiane</td><td>${fmt(rec.pg.medianReprojPx,2)} px</td></tr>
+        </table>
+      ` : `
+        <span class="pill bad">✗ Échec (${rec.pg.reason==='ransac_failed'?'RANSAC n\'a pas convergé':'pas assez de correspondances après filtrage'})</span>
+        <div class="muted" style="margin-top:8px;">Conformément à l'algorithme décrit dans le manuscrit, le système se replierait ici sur la pose du Niveau 2 (précision décamétrique). Essayez une nouvelle estimation APR ou augmentez le rayon de filtrage.</div>
+      `}
+    </div>
+  `);
+  wrap.appendChild(pgCard);
+
+  const clCard = el(`
+    <div class="card">
+      <h2><span class="step-badge" style="background:var(--bad);">Classique</span> Détails</h2>
+      ${clOk ? `
+        <div class="statgrid">
+          <div class="stat"><div class="v">${fmt(rec.classicError.posError,2)} m</div><div class="l">Erreur position</div></div>
+          <div class="stat"><div class="v">${fmt(rec.classicError.angError,2)}°</div><div class="l">Erreur orientation</div></div>
+          <div class="stat"><div class="v">${fmt(rec.classic.tMs,1)} ms</div><div class="l">Temps de calcul</div></div>
+          <div class="stat"><div class="v">${rec.classic.nInliers}</div><div class="l">Inliers</div></div>
+        </div>
+        <div class="divider"></div>
+        <table>
+          <tr><td class="muted">Correspondances totales</td><td>${rec.nCorrTotal}</td></tr>
+          <tr><td class="muted">Itérations RANSAC uniforme</td><td>${rec.classic.nIterUsed}</td></tr>
+          <tr><td class="muted">Erreur reprojection médiane</td><td>${fmt(rec.classic.medianReprojPx,2)} px</td></tr>
+        </table>
+      ` : `<span class="pill bad">✗ Échec : ${rec.classic.reason||'inconnu'}</span>`}
+    </div>
+  `);
+  wrap.appendChild(clCard);
+
+  wrap.appendChild(el(`
+    <button class="btn secondary" id="newRunBtn">🔁 Nouvelle localisation</button>
+  `));
+  setTimeout(()=>{ document.getElementById('newRunBtn').onclick = ()=>setView('capture'); },0);
+
+  return wrap;
+}
+
+/* ---------- VUE HISTORIQUE ---------- */
+function renderHistoryView(){
+  const wrap = el(`<section class="view active"></section>`);
+
+  const summaryCard = el(`<div class="card"></div>`);
+  const pgRows = STATE.history.filter(r=>r.methode==='PG-PnP' && r.succes);
+  const clRows = STATE.history.filter(r=>r.methode==='PnP classique' && r.succes);
+  const medPg = medianOf(pgRows.map(r=>r.erreur_position_m));
+  const medCl = medianOf(clRows.map(r=>r.erreur_position_m));
+  const medPgT = medianOf(pgRows.map(r=>r.temps_calcul_ms));
+  const medClT = medianOf(clRows.map(r=>r.temps_calcul_ms));
+  summaryCard.innerHTML = `
+    <h2>📈 Synthèse (${STATE.history.length} lignes enregistrées)</h2>
+    <div class="statgrid">
+      <div class="stat"><div class="v">${pgRows.length?fmt(medPg,2)+' m':'—'}</div><div class="l">Médiane PG-PnP</div></div>
+      <div class="stat"><div class="v">${clRows.length?fmt(medCl,2)+' m':'—'}</div><div class="l">Médiane classique</div></div>
+      <div class="stat"><div class="v">${pgRows.length?fmt(medPgT,1)+' ms':'—'}</div><div class="l">Temps médian PG-PnP</div></div>
+      <div class="stat"><div class="v">${clRows.length?fmt(medClT,1)+' ms':'—'}</div><div class="l">Temps médian classique</div></div>
+    </div>
+    <div style="height:10px;"></div>
+    <div class="btn-row">
+      <button class="btn" id="dlCsvBtn">⬇️ Télécharger le CSV</button>
+      <button class="btn bad" id="clearHistBtn" style="flex:0 0 auto;width:46px;">🗑️</button>
+    </div>
+  `;
+  wrap.appendChild(summaryCard);
+  setTimeout(()=>{
+    document.getElementById('dlCsvBtn').onclick = downloadCSV;
+    document.getElementById('clearHistBtn').onclick = ()=>{
+      if(confirm('Effacer tout l\'historique des localisations ?')) clearHistory();
+    };
+  },0);
+
+  if(STATE.history.length === 0){
+    wrap.appendChild(el(`<div class="card muted" style="text-align:center;">Aucune localisation enregistrée encore.</div>`));
+    return wrap;
+  }
+
+  const tableCard = el(`<div class="card"><h2>🗂️ Détail des runs</h2><div class="scroll-x" id="histTableWrap"></div></div>`);
+  wrap.appendChild(tableCard);
+  setTimeout(()=>{
+    const tw = document.getElementById('histTableWrap');
+    let rowsHtml = '';
+    for(const r of STATE.history.slice().reverse()){
+      const color = r.methode==='PG-PnP' ? 'var(--good)' : 'var(--bad)';
+      rowsHtml += `
+        <tr>
+          <td>${r.id}</td>
+          <td style="color:${color};font-weight:600;">${r.methode}</td>
+          <td>${r.succes ? '✓' : '✗'}</td>
+          <td>${r.succes ? fmt(r.erreur_position_m,2) : '—'}</td>
+          <td>${r.succes ? fmt(r.erreur_orientation_deg,2) : '—'}</td>
+          <td>${fmt(r.temps_calcul_ms,1)}</td>
+          <td>${r.n_inliers}</td>
+        </tr>
+      `;
+    }
+    tw.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>#</th><th>Méthode</th><th>OK</th><th>Err. pos (m)</th><th>Err. ang (°)</th><th>Temps (ms)</th><th>Inliers</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
+  },0);
+
+  return wrap;
+}
+
+/* ============================================================
+   INITIALISATION
+   ============================================================ */
+render();
+
+
+
+</script>
+</body>
+</html>
